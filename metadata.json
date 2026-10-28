@@ -1,0 +1,6 @@
+{
+  "name": "CoverCraft MP3",
+  "description": "Otomatis tambahkan sampul cover art berkualitas pada file MP3 tanpa cover dan uji pemutaran audio secara langsung.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
