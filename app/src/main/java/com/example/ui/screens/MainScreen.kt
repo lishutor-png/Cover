@@ -4,7 +4,6 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,14 +24,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.DeleteSweep
-import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -69,11 +67,13 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.model.ProcessingStatus
 import com.example.ui.FilterTab
 import com.example.ui.Mp3ViewModel
 import com.example.ui.components.AudioPlayerBar
 import com.example.ui.components.CoverPreviewModal
 import com.example.ui.components.Mp3CardItem
+import com.example.ui.components.RecordAudioModal
 import com.example.ui.theme.AmberWarning
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.ElectricViolet
@@ -92,6 +92,7 @@ fun MainScreen(
     val batchProgress by viewModel.batchProgress.collectAsState()
     val batchStatusText by viewModel.batchStatusText.collectAsState()
     val playbackState by viewModel.playbackState.collectAsState()
+    val recorderState by viewModel.recorderState.collectAsState()
     val selectedDetailItem by viewModel.selectedDetailItem.collectAsState()
     val selectedStyle by viewModel.selectedStyleForDetail.collectAsState()
     val userMessage by viewModel.userMessage.collectAsState()
@@ -99,6 +100,7 @@ fun MainScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var itemToDelete by remember { mutableStateOf<com.example.model.Mp3Item?>(null) }
     var showClearAllDialog by remember { mutableStateOf(false) }
+    var showRecordModal by remember { mutableStateOf(false) }
 
     LaunchedEffect(userMessage) {
         userMessage?.let { msg ->
@@ -107,7 +109,7 @@ fun MainScreen(
         }
     }
 
-    // SAF Document Picker for choosing multiple MP3 files
+    // SAF Document Picker: supports MP3, M4A, AAC, and all audio containers
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris: List<Uri> ->
@@ -204,7 +206,7 @@ fun MainScreen(
             // Hero Stats Card
             item {
                 val totalTracks = allTracks.size
-                val needsCoverCount = allTracks.count { it.needsCover }
+                val needsCoverCount = allTracks.count { it.needsCover || it.status == ProcessingStatus.ERROR }
                 val hasCoverCount = totalTracks - needsCoverCount
 
                 Card(
@@ -222,7 +224,7 @@ fun MainScreen(
                             .padding(16.dp)
                     ) {
                         Text(
-                            text = "Status Koleksi MP3",
+                            text = "Status Koleksi Audio & Rekaman",
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontWeight = FontWeight.SemiBold
@@ -255,7 +257,9 @@ fun MainScreen(
 
             // Primary Batch Action Hero
             item {
-                val needsCoverCount = allTracks.count { it.needsCover }
+                val needsCoverCount = allTracks.count { it.needsCover || it.status == ProcessingStatus.ERROR }
+                val totalTracks = allTracks.size
+                val canProcess = !isBatchProcessing && totalTracks > 0
 
                 Card(
                     modifier = Modifier
@@ -290,13 +294,13 @@ fun MainScreen(
                             Spacer(modifier = Modifier.width(12.dp))
                             Column {
                                 Text(
-                                    text = "Otomatisasi Cover MP3",
+                                    text = "Otomatisasi Cover Audio",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
-                                    text = "Tambah cover otomatis pada file yang belum punya cover",
+                                    text = "Mendukung MP3 & M4A / Rekaman Suara Ponsel",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -329,12 +333,18 @@ fun MainScreen(
 
                         // Big Action Button
                         Button(
-                            onClick = { viewModel.processAllMissingCovers() },
+                            onClick = {
+                                if (needsCoverCount > 0) {
+                                    viewModel.processAllMissingCovers(forceAll = false)
+                                } else {
+                                    viewModel.processAllMissingCovers(forceAll = true)
+                                }
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(48.dp)
                                 .testTag("process_all_missing_button"),
-                            enabled = !isBatchProcessing && needsCoverCount > 0,
+                            enabled = canProcess,
                             shape = RoundedCornerShape(12.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = ElectricViolet,
@@ -357,10 +367,10 @@ fun MainScreen(
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = if (needsCoverCount > 0) {
-                                        "⚡ Tambah Cover Otomatis ($needsCoverCount Lagu)"
-                                    } else {
-                                        "Semua File Sudah Memiliki Cover"
+                                    text = when {
+                                        totalTracks == 0 -> "Pilih atau Rekam Audio Terlebih Dahulu"
+                                        needsCoverCount > 0 -> "⚡ Tambah Cover Otomatis ($needsCoverCount File)"
+                                        else -> "⚡ Perbarui Semua Cover ($totalTracks File)"
                                     },
                                     fontWeight = FontWeight.Bold
                                 )
@@ -370,16 +380,16 @@ fun MainScreen(
                 }
             }
 
-            // Quick Import Buttons
+            // Quick Actions: Pick Audio, Record Voice, and Sample
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Button(
-                        onClick = { filePickerLauncher.launch(arrayOf("audio/*", "application/octet-stream")) },
+                        onClick = { filePickerLauncher.launch(arrayOf("audio/*", "application/octet-stream", "video/mp4")) },
                         modifier = Modifier
-                            .weight(1f)
+                            .weight(1.1f)
                             .testTag("pick_mp3_files_button"),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(
@@ -393,8 +403,29 @@ fun MainScreen(
                             tint = ElectricCyan,
                             modifier = Modifier.size(18.dp)
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(text = "Pilih File MP3", fontWeight = FontWeight.SemiBold)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(text = "Pilih Audio", fontWeight = FontWeight.SemiBold)
+                    }
+
+                    Button(
+                        onClick = { showRecordModal = true },
+                        modifier = Modifier
+                            .weight(0.95f)
+                            .testTag("record_audio_button"),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = ElectricViolet.copy(alpha = 0.2f),
+                            contentColor = ElectricViolet
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Mic,
+                            contentDescription = null,
+                            tint = ElectricViolet,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(text = "Rekam", fontWeight = FontWeight.Bold)
                     }
 
                     OutlinedButton(
@@ -407,8 +438,8 @@ fun MainScreen(
                             contentDescription = null,
                             modifier = Modifier.size(18.dp)
                         )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(text = "+ Contoh MP3")
+                        Spacer(modifier = Modifier.width(2.dp))
+                        Text(text = "Contoh")
                     }
                 }
             }
@@ -420,7 +451,7 @@ fun MainScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     val total = allTracks.size
-                    val needs = allTracks.count { it.needsCover }
+                    val needs = allTracks.count { it.needsCover || it.status == ProcessingStatus.ERROR }
                     val has = total - needs
 
                     FilterChip(
@@ -482,14 +513,14 @@ fun MainScreen(
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
-                                text = "Tidak ada file MP3 pada kategori ini",
+                                text = "Tidak ada file audio pada kategori ini",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "Gunakan tombol 'Pilih File MP3' atau '+ Contoh MP3' di atas untuk memulai.",
+                                text = "Pilih file rekaman/MP3 ponsel Anda atau gunakan tombol 'Rekam' untuk membuat rekaman suara baru.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -498,7 +529,7 @@ fun MainScreen(
                     }
                 }
             } else {
-                // List of MP3 items
+                // List of MP3 & M4A items
                 items(
                     items = filteredTracks,
                     key = { it.id }
@@ -538,10 +569,10 @@ fun MainScreen(
                 )
             },
             title = {
-                Text(text = "Hapus File MP3?")
+                Text(text = "Hapus File Audio?")
             },
             text = {
-                Text(text = "Lagu '${target.title}' akan dihapus dari daftar dan penyimpanan aplikasi.")
+                Text(text = "File '${target.title}' (${target.audioFormat.displayName}) akan dihapus dari daftar dan penyimpanan aplikasi.")
             },
             confirmButton = {
                 Button(
@@ -578,7 +609,7 @@ fun MainScreen(
                 Text(text = "Hapus Semua File?")
             },
             text = {
-                Text(text = "Semua lagu (${allTracks.size} file) akan dihapus dari daftar dan penyimpanan aplikasi.")
+                Text(text = "Semua lagu dan rekaman (${allTracks.size} file) akan dihapus dari daftar dan penyimpanan aplikasi.")
             },
             confirmButton = {
                 Button(
@@ -595,6 +626,22 @@ fun MainScreen(
                 OutlinedButton(onClick = { showClearAllDialog = false }) {
                     Text("Batal")
                 }
+            }
+        )
+    }
+
+    // Built-in Voice Recorder Modal
+    if (showRecordModal) {
+        RecordAudioModal(
+            recorderState = recorderState,
+            onStartRecording = { viewModel.startVoiceRecording() },
+            onStopRecordingAndProcess = { autoAddCover ->
+                viewModel.stopVoiceRecordingAndProcess(autoAddCover)
+                showRecordModal = false
+            },
+            onCancel = {
+                viewModel.cancelVoiceRecording()
+                showRecordModal = false
             }
         )
     }

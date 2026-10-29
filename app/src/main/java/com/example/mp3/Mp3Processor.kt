@@ -19,9 +19,10 @@ object Mp3Processor {
 
     /**
      * Inspects and creates an Mp3Item from a given Uri.
+     * Automatically caches the imported file to local app storage to prevent SAF permission expiration.
      */
     suspend fun parseFromUri(context: Context, uri: Uri): Mp3Item = withContext(Dispatchers.IO) {
-        var displayName = "audio_${System.currentTimeMillis()}.mp3"
+        var displayName = "rekaman_${System.currentTimeMillis()}.mp3"
 
         // Try getting real filename from ContentResolver
         try {
@@ -36,30 +37,64 @@ object Mp3Processor {
             }
         } catch (_: Exception) {}
 
-        if (displayName.isBlank() || displayName.startsWith("audio_")) {
+        if (displayName.isBlank() || displayName.startsWith("rekaman_")) {
             uri.lastPathSegment?.let { seg ->
                 val clean = seg.substringAfterLast('/')
                 if (clean.isNotBlank()) displayName = clean
             }
         }
 
-        // Read bytes for ID3 inspection
+        // Read bytes
         val bytes = readBytesFromUri(context, uri)
-        val id3Result = Id3v2Editor.inspect(bytes)
+        val format = AudioFormatDetector.detect(bytes, displayName)
 
-        // Also query MediaMetadataRetriever for duration, artist, title
-        var title = id3Result.title
-        var artist = id3Result.artist
-        var album = id3Result.album
+        // Cache file locally to guarantee permanent, fast read access for MediaPlayer and editors
+        val safeCleanName = sanitizeFileName(displayName)
+        val importDir = File(context.cacheDir, "imported_audio")
+        if (!importDir.exists()) importDir.mkdirs()
+        val cachedLocalFile = File(importDir, "${UUID.randomUUID().toString().take(8)}_$safeCleanName")
+        try {
+            FileOutputStream(cachedLocalFile).use { fos ->
+                fos.write(bytes)
+            }
+        } catch (_: Exception) {}
+
+        val workingUri = if (cachedLocalFile.exists() && cachedLocalFile.length() > 0) {
+            Uri.fromFile(cachedLocalFile)
+        } else {
+            uri
+        }
+
+        var title: String? = null
+        var artist: String? = null
+        var album: String? = null
+        var existingCover: ByteArray? = null
+
+        // Inspect metadata based on detected audio format
+        if (format == AudioFormat.M4A) {
+            val m4aResult = M4aCoverEditor.inspect(bytes)
+            title = m4aResult.title
+            artist = m4aResult.artist
+            album = m4aResult.album
+            existingCover = m4aResult.coverBytes
+        } else {
+            val id3Result = Id3v2Editor.inspect(bytes)
+            title = id3Result.title
+            artist = id3Result.artist
+            album = id3Result.album
+            existingCover = id3Result.coverBytes
+        }
+
+        // Also query MediaMetadataRetriever for duration and fallback artist/title
         var durationMs = 0L
         var retrieverCover: ByteArray? = null
 
         val retriever = MediaMetadataRetriever()
         try {
-            if (uri.scheme == "file") {
-                retriever.setDataSource(uri.path)
+            if (workingUri.scheme == "file") {
+                retriever.setDataSource(workingUri.path)
             } else {
-                retriever.setDataSource(context, uri)
+                retriever.setDataSource(context, workingUri)
             }
 
             if (title.isNullOrBlank()) {
@@ -80,17 +115,17 @@ object Mp3Processor {
             try { retriever.release() } catch (_: Exception) {}
         }
 
-        val fallbackTitle = displayName.substringBeforeLast('.').ifBlank { "Lagu Tanpa Judul" }
+        val fallbackTitle = displayName.substringBeforeLast('.').ifBlank { "Rekaman Audio" }
         val finalTitle = title?.ifBlank { fallbackTitle } ?: fallbackTitle
-        val finalArtist = artist?.ifBlank { "Artis Tidak Diketahui" } ?: "Artis Tidak Diketahui"
+        val finalArtist = artist?.ifBlank { if (format == AudioFormat.M4A) "Rekaman Suara" else "Artis Tidak Diketahui" } ?: "Artis Tidak Diketahui"
         val finalAlbum = album?.ifBlank { "CoverCraft Album" } ?: "CoverCraft Album"
 
-        val effectiveOriginalCover = id3Result.coverBytes ?: retrieverCover
-        val hasOriginalCover = effectiveOriginalCover != null
+        val effectiveOriginalCover = existingCover ?: retrieverCover
+        val hasOriginalCover = effectiveOriginalCover != null && effectiveOriginalCover.isNotEmpty()
 
         Mp3Item(
             id = UUID.randomUUID().toString(),
-            uri = uri,
+            uri = workingUri,
             fileName = displayName,
             title = finalTitle,
             artist = finalArtist,
@@ -100,12 +135,13 @@ object Mp3Processor {
             hasOriginalCover = hasOriginalCover,
             originalCoverBytes = effectiveOriginalCover,
             hasProcessedCover = false,
-            status = ProcessingStatus.IDLE
+            status = ProcessingStatus.IDLE,
+            audioFormat = format
         )
     }
 
     /**
-     * Adds cover art to an MP3 track and saves the resulting MP3 in app storage.
+     * Adds or updates cover art on an audio file (MP3 or M4A recording) and saves it to app storage.
      */
     suspend fun applyCoverArt(
         context: Context,
@@ -114,7 +150,19 @@ object Mp3Processor {
         style: CoverStyle? = null
     ): Mp3Item = withContext(Dispatchers.IO) {
         try {
-            val sourceBytes = readBytesFromUri(context, item.uri)
+            val sourceBytes = readBytesFromUri(context, item.effectiveUri)
+            if (sourceBytes.isEmpty()) {
+                return@withContext item.copy(
+                    status = ProcessingStatus.ERROR,
+                    errorMessage = "File audio kosong atau tidak dapat diakses."
+                )
+            }
+
+            val format = if (item.audioFormat != AudioFormat.UNKNOWN) {
+                item.audioFormat
+            } else {
+                AudioFormatDetector.detect(sourceBytes, item.fileName)
+            }
 
             val (coverBytes, _) = if (customCoverBytes != null) {
                 Pair(customCoverBytes, null)
@@ -127,24 +175,35 @@ object Mp3Processor {
                 Pair(bytes, bmp)
             }
 
-            val modifiedBytes = Id3v2Editor.embedCoverArt(
-                sourceBytes = sourceBytes,
-                coverImageBytes = coverBytes,
-                mimeType = "image/jpeg",
-                fallbackTitle = item.title,
-                fallbackArtist = item.artist,
-                fallbackAlbum = item.album
-            )
+            val modifiedBytes = if (format == AudioFormat.M4A) {
+                M4aCoverEditor.embedCoverArt(
+                    sourceBytes = sourceBytes,
+                    coverImageBytes = coverBytes,
+                    mimeType = "image/jpeg",
+                    fallbackTitle = item.title,
+                    fallbackArtist = item.artist,
+                    fallbackAlbum = item.album
+                )
+            } else {
+                Id3v2Editor.embedCoverArt(
+                    sourceBytes = sourceBytes,
+                    coverImageBytes = coverBytes,
+                    mimeType = "image/jpeg",
+                    fallbackTitle = item.title,
+                    fallbackArtist = item.artist,
+                    fallbackAlbum = item.album
+                )
+            }
 
             // Save to processed output directory
             val outputDir = File(context.filesDir, "processed_mp3s")
             if (!outputDir.exists()) outputDir.mkdirs()
 
-            val cleanName = if (item.fileName.endsWith(".mp3", ignoreCase = true)) {
-                item.fileName.substringBeforeLast('.') + "_covered.mp3"
-            } else {
-                "${item.fileName}_covered.mp3"
-            }
+            val ext = if (format == AudioFormat.M4A) ".m4a" else ".mp3"
+            val rawBaseName = item.fileName.substringBeforeLast('.')
+            val cleanBaseName = sanitizeFileName(rawBaseName)
+            val cleanName = "${cleanBaseName}_covered$ext"
+
             val outputFile = File(outputDir, cleanName)
             FileOutputStream(outputFile).use { fos ->
                 fos.write(modifiedBytes)
@@ -171,34 +230,57 @@ object Mp3Processor {
                 durationMs = verifiedDuration,
                 sizeBytes = outputFile.length(),
                 status = ProcessingStatus.SUCCESS,
-                errorMessage = null
+                errorMessage = null,
+                audioFormat = format
             )
-        } catch (e: Exception) {
+        } catch (t: Throwable) {
             item.copy(
                 status = ProcessingStatus.ERROR,
-                errorMessage = e.localizedMessage ?: "Gagal menyematkan cover"
+                errorMessage = t.localizedMessage ?: "Gagal menyematkan cover pada file audio"
             )
         }
     }
 
     /**
-     * Reads all bytes from a given URI using ContentResolver.
+     * Reads all bytes from a given URI safely.
      */
     private fun readBytesFromUri(context: Context, uri: Uri): ByteArray {
-        val inputStream: InputStream? = if (uri.scheme == "file") {
-            File(uri.path ?: "").inputStream()
-        } else {
-            context.contentResolver.openInputStream(uri)
-        }
-
-        return inputStream?.use { stream ->
-            val buffer = ByteArray(8192)
-            val baos = ByteArrayOutputStream()
-            var read: Int
-            while (stream.read(buffer).also { read = it } != -1) {
-                baos.write(buffer, 0, read)
+        return try {
+            val inputStream: InputStream? = if (uri.scheme == "file") {
+                File(uri.path ?: "").inputStream()
+            } else {
+                context.contentResolver.openInputStream(uri)
             }
-            baos.toByteArray()
-        } ?: ByteArray(0)
+
+            inputStream?.use { stream ->
+                val buffer = ByteArray(16384)
+                val baos = ByteArrayOutputStream()
+                var read: Int
+                while (stream.read(buffer).also { read = it } != -1) {
+                    baos.write(buffer, 0, read)
+                }
+                baos.toByteArray()
+            } ?: ByteArray(0)
+        } catch (_: Exception) {
+            ByteArray(0)
+        }
+    }
+
+    /**
+     * Sanitizes file name by removing illegal filesystem characters.
+     */
+    fun sanitizeFileName(name: String): String {
+        return name
+            .replace('/', '_')
+            .replace('\\', '_')
+            .replace(':', '_')
+            .replace('*', '_')
+            .replace('?', '_')
+            .replace('"', '_')
+            .replace('<', '_')
+            .replace('>', '_')
+            .replace('|', '_')
+            .trim()
+            .ifBlank { "audio_${System.currentTimeMillis()}" }
     }
 }

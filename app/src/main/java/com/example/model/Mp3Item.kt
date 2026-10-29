@@ -1,6 +1,7 @@
 package com.example.model
 
 import android.net.Uri
+import com.example.mp3.AudioFormat
 
 enum class ProcessingStatus {
     IDLE,
@@ -10,7 +11,7 @@ enum class ProcessingStatus {
 }
 
 /**
- * Representation of an MP3 audio track in the app.
+ * Representation of an audio track (MP3, M4A voice recording, etc.) in the app.
  */
 data class Mp3Item(
     val id: String,
@@ -30,7 +31,8 @@ data class Mp3Item(
     val errorMessage: String? = null,
     val isSample: Boolean = false,
     val sampleRate: Int = 44100,
-    val bitrateKbps: Int = 128
+    val bitrateKbps: Int = 128,
+    val audioFormat: AudioFormat = AudioFormat.MP3
 ) {
     val effectiveCoverBytes: ByteArray?
         get() = processedCoverBytes ?: originalCoverBytes
@@ -67,7 +69,8 @@ data class Mp3Item(
         other as Mp3Item
         return id == other.id &&
                 hasProcessedCover == other.hasProcessedCover &&
-                status == other.status
+                status == other.status &&
+                errorMessage == other.errorMessage
     }
 
     override fun hashCode(): Int {

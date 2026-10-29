@@ -1,15 +1,15 @@
 package com.example.ui
 
 import android.app.Application
-import android.graphics.Bitmap
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.model.CoverStyle
 import com.example.model.Mp3Item
 import com.example.model.ProcessingStatus
-import com.example.mp3.CoverArtGenerator
+import com.example.mp3.AudioRecorderHelper
 import com.example.mp3.Mp3Processor
+import com.example.mp3.RecorderState
 import com.example.mp3.SampleAudioGenerator
 import com.example.player.AudioPlayerController
 import com.example.player.PlaybackState
@@ -24,7 +24,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileOutputStream
 
 enum class FilterTab {
     ALL,
@@ -36,6 +35,9 @@ class Mp3ViewModel(application: Application) : AndroidViewModel(application) {
 
     private val playerController = AudioPlayerController(application, viewModelScope)
     val playbackState: StateFlow<PlaybackState> = playerController.playbackState
+
+    private val audioRecorder = AudioRecorderHelper(application, viewModelScope)
+    val recorderState: StateFlow<RecorderState> = audioRecorder.recorderState
 
     private val _tracks = MutableStateFlow<List<Mp3Item>>(emptyList())
     val tracks: StateFlow<List<Mp3Item>> = _tracks.asStateFlow()
@@ -94,7 +96,6 @@ class Mp3ViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val samples = SampleAudioGenerator.createSampleTracks(getApplication())
             _tracks.update { current ->
-                // Avoid duplicating if already present
                 val existingIds = current.map { it.title }.toSet()
                 val newOnes = samples.filter { it.title !in existingIds }
                 newOnes + current
@@ -106,30 +107,68 @@ class Mp3ViewModel(application: Application) : AndroidViewModel(application) {
     fun importFiles(uris: List<Uri>) {
         if (uris.isEmpty()) return
         viewModelScope.launch {
-            _batchStatusText.value = "Membaca metadata ${uris.size} file MP3..."
+            _batchStatusText.value = "Membaca & memproses ${uris.size} file audio..."
             val parsedList = mutableListOf<Mp3Item>()
             for (uri in uris) {
                 try {
                     val item = Mp3Processor.parseFromUri(getApplication(), uri)
                     parsedList.add(item)
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    _userMessage.value = "Gagal membaca file: ${e.localizedMessage}"
+                }
             }
 
             _tracks.update { current ->
                 parsedList + current.filter { c -> parsedList.none { p -> p.fileName == c.fileName } }
             }
             _batchStatusText.value = null
-            _userMessage.value = "Berhasil menambahkan ${parsedList.size} file MP3"
+            _userMessage.value = "Berhasil menambahkan ${parsedList.size} file audio ke daftar."
         }
     }
 
+    fun startVoiceRecording(): Boolean {
+        // Stop playback if playing
+        if (playbackState.value.isPlaying) {
+            pausePlayback()
+        }
+        return audioRecorder.startRecording()
+    }
+
+    fun stopVoiceRecordingAndProcess(autoAddCover: Boolean = true) {
+        viewModelScope.launch {
+            val recordedFile = audioRecorder.stopRecording()
+            if (recordedFile != null && recordedFile.exists()) {
+                val item = Mp3Processor.parseFromUri(getApplication(), Uri.fromFile(recordedFile))
+                _tracks.update { current -> listOf(item) + current }
+
+                if (autoAddCover) {
+                    _userMessage.value = "Rekaman selesai! Menyematkan cover otomatis..."
+                    processSingleItem(item)
+                } else {
+                    _userMessage.value = "Rekaman berhasil disimpan: ${item.fileName}"
+                }
+            } else {
+                _userMessage.value = "Perekaman dibatalkan atau file tidak tersimpan."
+            }
+        }
+    }
+
+    fun cancelVoiceRecording() {
+        audioRecorder.cancelRecording()
+    }
+
     /**
-     * Otomatis tambahkan cover pada file MP3 yang tidak memiliki cover!
+     * Otomatis tambahkan cover pada file MP3/M4A yang belum punya cover (atau semua jika forceAll = true).
      */
-    fun processAllMissingCovers() {
-        val targets = _tracks.value.filter { it.needsCover }
+    fun processAllMissingCovers(forceAll: Boolean = false) {
+        val targets = if (forceAll) {
+            _tracks.value
+        } else {
+            _tracks.value.filter { it.needsCover || it.status == ProcessingStatus.ERROR }
+        }
+
         if (targets.isEmpty()) {
-            _userMessage.value = "Semua file MP3 sudah memiliki sampul cover!"
+            _userMessage.value = "Semua file audio sudah memiliki sampul cover!"
             return
         }
 
@@ -143,7 +182,6 @@ class Mp3ViewModel(application: Application) : AndroidViewModel(application) {
             for (item in targets) {
                 _batchStatusText.value = "Membuat & menyematkan cover untuk (${completed + 1}/$total): ${item.title}"
 
-                // Update item status to processing
                 _tracks.update { list ->
                     list.map { if (it.id == item.id) it.copy(status = ProcessingStatus.PROCESSING) else it }
                 }
@@ -163,12 +201,12 @@ class Mp3ViewModel(application: Application) : AndroidViewModel(application) {
 
             _isBatchProcessing.value = false
             _batchStatusText.value = null
-            _userMessage.value = "Sukses! $completed file MP3 berhasil dipasangi cover art."
+            _userMessage.value = "Sukses! $completed file berhasil dipasangi cover art."
         }
     }
 
     /**
-     * Tambahkan cover untuk satu file tertentu dengan gaya pilihan atau gambar kustom.
+     * Tambahkan atau ganti cover untuk satu file tertentu dengan gaya pilihan atau gambar kustom.
      */
     fun processSingleItem(item: Mp3Item, customImageBytes: ByteArray? = null, style: CoverStyle? = null) {
         viewModelScope.launch {
@@ -258,17 +296,15 @@ class Mp3ViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            // Remove generated output file from disk
+            val appPkg = getApplication<Application>().packageName
+
             item.processedUri?.path?.let { path ->
                 val f = File(path)
                 if (f.exists()) f.delete()
             }
-
-            // Remove sample file from internal storage if applicable
             if (item.uri.scheme == "file") {
                 item.uri.path?.let { path ->
                     val f = File(path)
-                    val appPkg = getApplication<Application>().packageName
                     if (f.exists() && path.contains(appPkg)) {
                         f.delete()
                     }
@@ -276,12 +312,13 @@ class Mp3ViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             _tracks.update { list -> list.filter { it.id != item.id } }
+
             if (_selectedDetailItem.value?.id == item.id) {
                 _selectedDetailItem.value = null
             }
 
             withContext(Dispatchers.Main) {
-                _userMessage.value = "Lagu '${item.title}' berhasil dihapus."
+                _userMessage.value = "File '${item.title}' telah dihapus."
             }
         }
     }
@@ -318,5 +355,6 @@ class Mp3ViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         super.onCleared()
         playerController.release()
+        audioRecorder.cancelRecording()
     }
 }

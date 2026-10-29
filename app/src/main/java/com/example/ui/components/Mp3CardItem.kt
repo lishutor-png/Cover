@@ -20,13 +20,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Warning
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -53,6 +57,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.model.Mp3Item
 import com.example.model.ProcessingStatus
+import com.example.mp3.AudioFormat
 import com.example.ui.theme.AmberWarning
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.ElectricViolet
@@ -73,6 +78,7 @@ fun Mp3CardItem(
     val borderColor by animateColorAsState(
         targetValue = when {
             isCurrentTrack -> ElectricCyan
+            item.status == ProcessingStatus.ERROR -> RubyError
             item.hasProcessedCover -> EmeraldSuccess.copy(alpha = 0.5f)
             item.needsCover -> AmberWarning.copy(alpha = 0.4f)
             else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
@@ -127,16 +133,16 @@ fun Mp3CardItem(
                             verticalArrangement = Arrangement.Center
                         ) {
                             Icon(
-                                imageVector = Icons.Default.MusicNote,
+                                imageVector = if (item.audioFormat == AudioFormat.M4A) Icons.Default.Mic else Icons.Default.MusicNote,
                                 contentDescription = null,
-                                tint = AmberWarning,
+                                tint = if (item.audioFormat == AudioFormat.M4A) ElectricCyan else AmberWarning,
                                 modifier = Modifier.size(28.dp)
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "NO COVER",
-                                color = AmberWarning,
-                                fontSize = 9.sp,
+                                text = if (item.audioFormat == AudioFormat.M4A) "REKAMAN" else "NO COVER",
+                                color = if (item.audioFormat == AudioFormat.M4A) ElectricCyan else AmberWarning,
+                                fontSize = 8.sp,
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -165,7 +171,7 @@ fun Mp3CardItem(
 
                 Spacer(modifier = Modifier.width(14.dp))
 
-                // Track Title and Artist details
+                // Track Title, Artist, and format details
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = item.title,
@@ -190,6 +196,20 @@ fun Mp3CardItem(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
+                        // Audio format badge
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = if (item.audioFormat == AudioFormat.M4A) ElectricCyan.copy(alpha = 0.2f) else ElectricViolet.copy(alpha = 0.2f)
+                        ) {
+                            Text(
+                                text = item.audioFormat.displayName,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (item.audioFormat == AudioFormat.M4A) ElectricCyan else ElectricViolet
+                            )
+                        }
+
                         when {
                             item.status == ProcessingStatus.PROCESSING -> {
                                 Surface(
@@ -208,9 +228,34 @@ fun Mp3CardItem(
                                         Spacer(modifier = Modifier.width(4.dp))
                                         Text(
                                             text = "Menyematkan...",
-                                            fontSize = 11.sp,
+                                            fontSize = 10.sp,
                                             color = ElectricViolet,
                                             fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                }
+                            }
+                            item.status == ProcessingStatus.ERROR -> {
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = RubyError.copy(alpha = 0.2f)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.ErrorOutline,
+                                            contentDescription = null,
+                                            tint = RubyError,
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = "Gagal",
+                                            fontSize = 10.sp,
+                                            color = RubyError,
+                                            fontWeight = FontWeight.Bold
                                         )
                                     }
                                 }
@@ -233,7 +278,7 @@ fun Mp3CardItem(
                                         Spacer(modifier = Modifier.width(4.dp))
                                         Text(
                                             text = "Cover Terpasang",
-                                            fontSize = 11.sp,
+                                            fontSize = 10.sp,
                                             color = EmeraldSuccess,
                                             fontWeight = FontWeight.SemiBold
                                         )
@@ -246,9 +291,9 @@ fun Mp3CardItem(
                                     color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
                                 ) {
                                     Text(
-                                        text = "Ada Cover Bawaan",
+                                        text = "Cover Bawaan",
                                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                        fontSize = 11.sp,
+                                        fontSize = 10.sp,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
@@ -271,7 +316,7 @@ fun Mp3CardItem(
                                         Spacer(modifier = Modifier.width(4.dp))
                                         Text(
                                             text = "Perlu Cover",
-                                            fontSize = 11.sp,
+                                            fontSize = 10.sp,
                                             color = AmberWarning,
                                             fontWeight = FontWeight.Bold
                                         )
@@ -281,8 +326,8 @@ fun Mp3CardItem(
                         }
 
                         Text(
-                            text = "•  ${item.formattedDuration}  •  ${item.formattedSize}",
-                            fontSize = 11.sp,
+                            text = "• ${item.formattedDuration}",
+                            fontSize = 10.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -328,46 +373,71 @@ fun Mp3CardItem(
                 }
             }
 
-            // Quick Actions Footer if needs cover or error
-            if (item.needsCover || item.status == ProcessingStatus.ERROR) {
-                Spacer(modifier = Modifier.height(10.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+            // Error message display if present
+            if (item.status == ProcessingStatus.ERROR && !item.errorMessage.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = RubyError.copy(alpha = 0.12f),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    FilledTonalButton(
-                        onClick = onAddCoverClick,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("add_cover_btn_${item.id}"),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.AutoAwesome,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "Beri Cover Otomatis",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
+                    Text(
+                        text = "Info Error: ${item.errorMessage}",
+                        color = RubyError,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
+            }
 
-                    OutlinedButton(
-                        onClick = onDetailClick,
-                        modifier = Modifier.testTag("detail_btn_${item.id}"),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Tune,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(text = "Opsi", fontSize = 12.sp)
+            // Quick Actions Footer (Always accessible on every track!)
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilledTonalButton(
+                    onClick = onAddCoverClick,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("add_cover_btn_${item.id}"),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = if (item.status == ProcessingStatus.ERROR) {
+                        ButtonDefaults.filledTonalButtonColors(containerColor = AmberWarning.copy(alpha = 0.3f))
+                    } else {
+                        ButtonDefaults.filledTonalButtonColors()
                     }
+                ) {
+                    Icon(
+                        imageVector = if (item.status == ProcessingStatus.ERROR) Icons.Default.Refresh else Icons.Default.AutoAwesome,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = when {
+                            item.status == ProcessingStatus.ERROR -> "Coba Beri Cover Lagi"
+                            item.hasProcessedCover -> "Ganti / Ubah Cover"
+                            item.hasOriginalCover -> "Ganti Cover Rekaman"
+                            else -> "Beri Cover Otomatis"
+                        },
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = onDetailClick,
+                    modifier = Modifier.testTag("detail_btn_${item.id}"),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Tune,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(text = "Opsi", fontSize = 12.sp)
                 }
             }
         }

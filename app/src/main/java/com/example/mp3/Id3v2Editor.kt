@@ -1,12 +1,10 @@
 package com.example.mp3
 
 import java.io.ByteArrayOutputStream
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
 /**
  * Pure Kotlin ID3v2.3 / ID3v2.4 parser and editor for MP3 files.
- * Accurately parses existing metadata, embeds APIC (Attached Picture) frames,
+ * Accurately parses existing metadata (v2.2, v2.3, v2.4), embeds APIC (Attached Picture) frames,
  * and preserves audio bitstream intact without corruption.
  */
 object Id3v2Editor {
@@ -44,8 +42,9 @@ object Id3v2Editor {
         val versionMajor = mp3Bytes[3].toInt() and 0xFF
         val flags = mp3Bytes[5].toInt() and 0xFF
         val hasExtendedHeader = (flags and 0x40) != 0
+        val hasFooter = (flags and 0x10) != 0
         val tagDataSize = readSynchsafe(mp3Bytes, 6)
-        val audioOffset = (10 + tagDataSize).coerceAtMost(mp3Bytes.size)
+        val audioOffset = (10 + tagDataSize + (if (hasFooter) 10 else 0)).coerceAtMost(mp3Bytes.size)
 
         var hasCover = false
         var extractedCover: ByteArray? = null
@@ -59,43 +58,52 @@ object Id3v2Editor {
             cursor += extSize.coerceAtLeast(4)
         }
 
-        while (cursor + 10 <= audioOffset) {
-            // Check for padding (null bytes)
-            if (mp3Bytes[cursor] == 0.toByte()) {
-                break
-            }
-
-            val frameId = String(mp3Bytes, cursor, 4, Charsets.ISO_8859_1)
-            val frameSize = if (versionMajor == 4) {
-                readSynchsafe(mp3Bytes, cursor + 4)
-            } else {
-                readInt32BE(mp3Bytes, cursor + 4)
-            }
-
-            cursor += 10
-            if (frameSize <= 0 || cursor + frameSize > audioOffset) {
-                break
-            }
-
-            val frameData = mp3Bytes.copyOfRange(cursor, cursor + frameSize)
-
-            when (frameId) {
-                FRAME_APIC -> {
-                    hasCover = true
-                    extractedCover = parseApicFrame(frameData)
+        if (versionMajor == 2) {
+            // ID3v2.2 uses 3-byte frame IDs and 3-byte frame sizes
+            while (cursor + 6 <= audioOffset) {
+                if (mp3Bytes[cursor] == 0.toByte()) break
+                val frameId = String(mp3Bytes, cursor, 3, Charsets.ISO_8859_1)
+                val frameSize = readInt24BE(mp3Bytes, cursor + 3)
+                cursor += 6
+                if (frameSize <= 0 || cursor + frameSize > audioOffset) break
+                val frameData = mp3Bytes.copyOfRange(cursor, cursor + frameSize)
+                when (frameId) {
+                    "PIC" -> {
+                        hasCover = true
+                        extractedCover = parseApicFrameV2(frameData)
+                    }
+                    "TT2" -> title = parseTextFrame(frameData)
+                    "TP1" -> artist = parseTextFrame(frameData)
+                    "TAL" -> album = parseTextFrame(frameData)
                 }
-                FRAME_TIT2 -> {
-                    title = parseTextFrame(frameData)
-                }
-                FRAME_TPE1 -> {
-                    artist = parseTextFrame(frameData)
-                }
-                FRAME_TALB -> {
-                    album = parseTextFrame(frameData)
-                }
+                cursor += frameSize
             }
+        } else {
+            // ID3v2.3 and ID3v2.4
+            while (cursor + 10 <= audioOffset) {
+                if (mp3Bytes[cursor] == 0.toByte()) break
+                val frameId = String(mp3Bytes, cursor, 4, Charsets.ISO_8859_1)
+                val frameSize = if (versionMajor == 4) {
+                    readSynchsafe(mp3Bytes, cursor + 4)
+                } else {
+                    readInt32BE(mp3Bytes, cursor + 4)
+                }
 
-            cursor += frameSize
+                cursor += 10
+                if (frameSize <= 0 || cursor + frameSize > audioOffset) break
+                val frameData = mp3Bytes.copyOfRange(cursor, cursor + frameSize)
+
+                when (frameId) {
+                    FRAME_APIC -> {
+                        hasCover = true
+                        extractedCover = parseApicFrame(frameData)
+                    }
+                    FRAME_TIT2 -> title = parseTextFrame(frameData)
+                    FRAME_TPE1 -> artist = parseTextFrame(frameData)
+                    FRAME_TALB -> album = parseTextFrame(frameData)
+                }
+                cursor += frameSize
+            }
         }
 
         return TagInspectionResult(
@@ -111,7 +119,7 @@ object Id3v2Editor {
     }
 
     /**
-     * Embeds JPEG/PNG image bytes into the MP3's ID3v2 APIC frame.
+     * Embeds JPEG/PNG image bytes into the MP3's ID3v2.3 APIC frame.
      * Preserves existing metadata and original MPEG audio stream completely.
      */
     fun embedCoverArt(
@@ -129,8 +137,8 @@ object Id3v2Editor {
         var foundArtist = inspection.artist != null
         var foundAlbum = inspection.album != null
 
-        // Extract existing non-APIC frames from source if ID3v2 exists
-        if (inspection.hasId3v2 && inspection.audioDataOffset > 10) {
+        // Extract existing non-APIC frames from source if standard ID3v2.3/2.4 exists
+        if (inspection.hasId3v2 && inspection.versionMajor >= 3 && inspection.audioDataOffset > 10) {
             val versionMajor = inspection.versionMajor
             val flags = sourceBytes[5].toInt() and 0xFF
             val hasExtendedHeader = (flags and 0x40) != 0
@@ -143,9 +151,7 @@ object Id3v2Editor {
             }
 
             while (cursor + 10 <= audioOffset) {
-                if (sourceBytes[cursor] == 0.toByte()) {
-                    break
-                }
+                if (sourceBytes[cursor] == 0.toByte()) break
                 val frameId = String(sourceBytes, cursor, 4, Charsets.ISO_8859_1)
                 val frameSize = if (versionMajor == 4) {
                     readSynchsafe(sourceBytes, cursor + 4)
@@ -154,12 +160,9 @@ object Id3v2Editor {
                 }
 
                 val totalFrameBytes = 10 + frameSize
-                if (frameSize <= 0 || cursor + totalFrameBytes > audioOffset) {
-                    break
-                }
+                if (frameSize <= 0 || cursor + totalFrameBytes > audioOffset) break
 
-                if (frameId != FRAME_APIC) {
-                    // Convert frame to ID3v2.3 standard (normal 32-bit BE length)
+                if (frameId != FRAME_APIC && frameId.all { it in 'A'..'Z' || it in '0'..'9' }) {
                     val frameContent = sourceBytes.copyOfRange(cursor + 10, cursor + totalFrameBytes)
                     preservedFrames.add(buildFrame(frameId, frameContent))
                 }
@@ -171,12 +174,20 @@ object Id3v2Editor {
         // Add text frames if not present
         if (!foundTitle) {
             preservedFrames.add(buildTextFrame(FRAME_TIT2, fallbackTitle))
+        } else if (inspection.versionMajor == 2 && inspection.title != null) {
+            preservedFrames.add(buildTextFrame(FRAME_TIT2, inspection.title))
         }
+
         if (!foundArtist) {
             preservedFrames.add(buildTextFrame(FRAME_TPE1, fallbackArtist))
+        } else if (inspection.versionMajor == 2 && inspection.artist != null) {
+            preservedFrames.add(buildTextFrame(FRAME_TPE1, inspection.artist))
         }
+
         if (!foundAlbum) {
             preservedFrames.add(buildTextFrame(FRAME_TALB, fallbackAlbum))
+        } else if (inspection.versionMajor == 2 && inspection.album != null) {
+            preservedFrames.add(buildTextFrame(FRAME_TALB, inspection.album))
         }
 
         // Build new APIC frame
@@ -206,7 +217,7 @@ object Id3v2Editor {
         val synchsafeSize = toSynchsafe(tagSize)
         System.arraycopy(synchsafeSize, 0, header, 6, 4)
 
-        // Audio payload (everything after previous ID3 header aligned to first MPEG sync frame)
+        // Audio payload: find MPEG sync word without cutting audio frames
         val audioOffset = findMpegAudioOffset(sourceBytes, inspection.audioDataOffset)
         val audioLength = sourceBytes.size - audioOffset
 
@@ -224,13 +235,21 @@ object Id3v2Editor {
         val offset = suggestedOffset.coerceIn(0, bytes.size)
         if (offset >= bytes.size) return offset
 
-        // Scan forward up to 8192 bytes for the first MPEG sync word (0xFF followed by 0xEx or 0xFx)
-        val maxScan = (offset + 8192).coerceAtMost(bytes.size - 1)
+        // Scan forward up to 65536 bytes for verified MPEG frame sync header
+        val maxScan = (offset + 65536).coerceAtMost(bytes.size - 4)
         for (i in offset until maxScan) {
             val b0 = bytes[i].toInt() and 0xFF
             val b1 = bytes[i + 1].toInt() and 0xFF
+            val b2 = bytes[i + 2].toInt() and 0xFF
             if (b0 == 0xFF && (b1 and 0xE0) == 0xE0) {
-                return i
+                val version = (b1 shr 3) and 0x03
+                val layer = (b1 shr 1) and 0x03
+                val bitrateIdx = (b2 shr 4) and 0x0F
+                val sampleIdx = (b2 shr 2) and 0x03
+                // Valid MPEG audio: version != 1 (reserved), layer != 0, bitrateIdx != 15, sampleIdx != 3
+                if (version != 1 && layer != 0 && bitrateIdx != 15 && sampleIdx != 3) {
+                    return i
+                }
             }
         }
         return offset
@@ -301,7 +320,6 @@ object Id3v2Editor {
         }
         if (mimeEnd + 2 >= frameData.size) return null
 
-        val pictureType = frameData[mimeEnd + 1].toInt() and 0xFF
         var descEnd = mimeEnd + 2
 
         // Skip description string
@@ -322,6 +340,31 @@ object Id3v2Editor {
             descEnd += 1
         }
 
+        if (descEnd < frameData.size) {
+            return frameData.copyOfRange(descEnd, frameData.size)
+        }
+        return null
+    }
+
+    private fun parseApicFrameV2(frameData: ByteArray): ByteArray? {
+        if (frameData.size < 6) return null
+        // ID3v2.2 PIC: 1 byte encoding, 3 bytes image format (JPG/PNG), 1 byte pic type, desc, image
+        val encoding = frameData[0].toInt() and 0xFF
+        var descEnd = 5
+        if (encoding == 1 || encoding == 2) {
+            while (descEnd + 1 < frameData.size) {
+                if (frameData[descEnd] == 0.toByte() && frameData[descEnd + 1] == 0.toByte()) {
+                    descEnd += 2
+                    break
+                }
+                descEnd += 2
+            }
+        } else {
+            while (descEnd < frameData.size && frameData[descEnd] != 0.toByte()) {
+                descEnd++
+            }
+            descEnd += 1
+        }
         if (descEnd < frameData.size) {
             return frameData.copyOfRange(descEnd, frameData.size)
         }
@@ -366,5 +409,11 @@ object Id3v2Editor {
                 ((b[offset + 1].toInt() and 0xFF) shl 16) or
                 ((b[offset + 2].toInt() and 0xFF) shl 8) or
                 (b[offset + 3].toInt() and 0xFF)
+    }
+
+    private fun readInt24BE(b: ByteArray, offset: Int): Int {
+        return ((b[offset].toInt() and 0xFF) shl 16) or
+                ((b[offset + 1].toInt() and 0xFF) shl 8) or
+                (b[offset + 2].toInt() and 0xFF)
     }
 }
