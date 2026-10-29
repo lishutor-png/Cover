@@ -30,7 +30,10 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -55,7 +58,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -92,6 +97,8 @@ fun MainScreen(
     val userMessage by viewModel.userMessage.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
+    var itemToDelete by remember { mutableStateOf<com.example.model.Mp3Item?>(null) }
+    var showClearAllDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(userMessage) {
         userMessage?.let { msg ->
@@ -148,6 +155,18 @@ fun MainScreen(
                     }
                 },
                 actions = {
+                    if (allTracks.isNotEmpty()) {
+                        IconButton(
+                            onClick = { showClearAllDialog = true },
+                            modifier = Modifier.testTag("clear_all_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.DeleteSweep,
+                                contentDescription = "Bersihkan Semua Lagu",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                     IconButton(
                         onClick = { viewModel.loadSampleTracks() },
                         modifier = Modifier.testTag("reload_samples_button")
@@ -493,7 +512,8 @@ fun MainScreen(
                         isCurrentTrack = isCurrentTrack,
                         onPlayClick = { viewModel.playTrack(track) },
                         onAddCoverClick = { viewModel.processSingleItem(track) },
-                        onDetailClick = { viewModel.selectDetailItem(track) }
+                        onDetailClick = { viewModel.selectDetailItem(track) },
+                        onDeleteClick = { itemToDelete = track }
                     )
                 }
             }
@@ -503,6 +523,80 @@ fun MainScreen(
                 Spacer(modifier = Modifier.height(80.dp))
             }
         }
+    }
+
+    // Single Track Delete Confirmation Dialog
+    itemToDelete?.let { target ->
+        AlertDialog(
+            onDismissRequest = { itemToDelete = null },
+            icon = {
+                Icon(
+                    imageVector = Icons.Outlined.DeleteOutline,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(28.dp)
+                )
+            },
+            title = {
+                Text(text = "Hapus File MP3?")
+            },
+            text = {
+                Text(text = "Lagu '${target.title}' akan dihapus dari daftar dan penyimpanan aplikasi.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteTrack(target)
+                        itemToDelete = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Hapus")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { itemToDelete = null }) {
+                    Text("Batal")
+                }
+            }
+        )
+    }
+
+    // Clear All Tracks Confirmation Dialog
+    if (showClearAllDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearAllDialog = false },
+            icon = {
+                Icon(
+                    imageVector = Icons.Outlined.DeleteSweep,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(28.dp)
+                )
+            },
+            title = {
+                Text(text = "Hapus Semua File?")
+            },
+            text = {
+                Text(text = "Semua lagu (${allTracks.size} file) akan dihapus dari daftar dan penyimpanan aplikasi.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.clearAllTracks()
+                        showClearAllDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Hapus Semua")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showClearAllDialog = false }) {
+                    Text("Batal")
+                }
+            }
+        )
     }
 
     // Cover Preview / Customization Modal
@@ -516,6 +610,7 @@ fun MainScreen(
             },
             onPlayAudio = { viewModel.playTrack(it) },
             onExportFile = { track, uri -> viewModel.exportToDestination(track, uri) },
+            onDeleteFile = { track -> itemToDelete = track },
             onDismiss = { viewModel.selectDetailItem(null) }
         )
     }

@@ -250,6 +250,71 @@ class Mp3ViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun deleteTrack(item: Mp3Item) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (playbackState.value.currentTrack?.id == item.id) {
+                withContext(Dispatchers.Main) {
+                    playerController.stop()
+                }
+            }
+
+            // Remove generated output file from disk
+            item.processedUri?.path?.let { path ->
+                val f = File(path)
+                if (f.exists()) f.delete()
+            }
+
+            // Remove sample file from internal storage if applicable
+            if (item.uri.scheme == "file") {
+                item.uri.path?.let { path ->
+                    val f = File(path)
+                    val appPkg = getApplication<Application>().packageName
+                    if (f.exists() && path.contains(appPkg)) {
+                        f.delete()
+                    }
+                }
+            }
+
+            _tracks.update { list -> list.filter { it.id != item.id } }
+            if (_selectedDetailItem.value?.id == item.id) {
+                _selectedDetailItem.value = null
+            }
+
+            withContext(Dispatchers.Main) {
+                _userMessage.value = "Lagu '${item.title}' berhasil dihapus."
+            }
+        }
+    }
+
+    fun clearAllTracks() {
+        viewModelScope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.Main) {
+                playerController.stop()
+            }
+            val currentList = _tracks.value
+            val appPkg = getApplication<Application>().packageName
+            for (item in currentList) {
+                item.processedUri?.path?.let { path ->
+                    val f = File(path)
+                    if (f.exists()) f.delete()
+                }
+                if (item.uri.scheme == "file") {
+                    item.uri.path?.let { path ->
+                        val f = File(path)
+                        if (f.exists() && path.contains(appPkg)) {
+                            f.delete()
+                        }
+                    }
+                }
+            }
+            _tracks.value = emptyList()
+            _selectedDetailItem.value = null
+            withContext(Dispatchers.Main) {
+                _userMessage.value = "Semua file berhasil dihapus dari daftar."
+            }
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         playerController.release()

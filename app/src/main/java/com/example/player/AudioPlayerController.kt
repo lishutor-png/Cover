@@ -3,7 +3,7 @@ package com.example.player
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.MediaPlayer
-import android.net.Uri
+import android.os.ParcelFileDescriptor
 import com.example.model.Mp3Item
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -15,6 +15,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileNotFoundException
 
 data class PlaybackState(
     val currentTrack: Mp3Item? = null,
@@ -32,6 +35,8 @@ class AudioPlayerController(
 ) {
     private var mediaPlayer: MediaPlayer? = null
     private var progressJob: Job? = null
+    private var activeFis: FileInputStream? = null
+    private var activePfd: ParcelFileDescriptor? = null
 
     private val _playbackState = MutableStateFlow(PlaybackState())
     val playbackState: StateFlow<PlaybackState> = _playbackState.asStateFlow()
@@ -63,12 +68,30 @@ class AudioPlayerController(
                 )
 
                 val targetUri = item.effectiveUri
-                if (targetUri.scheme == "file") {
-                    setDataSource(targetUri.path ?: "")
-                } else {
-                    context.contentResolver.openFileDescriptor(targetUri, "r")?.use { pfd ->
-                        setDataSource(pfd.fileDescriptor)
-                    } ?: setDataSource(context, targetUri)
+                when {
+                    targetUri.scheme == "file" || targetUri.path?.startsWith("/") == true -> {
+                        val path = targetUri.path ?: ""
+                        val file = File(path)
+                        if (!file.exists()) {
+                            throw FileNotFoundException("File audio tidak ditemukan: $path")
+                        }
+                        // Open FileInputStream in app process so mediaserver gets open descriptor
+                        val fis = FileInputStream(file)
+                        activeFis = fis
+                        setDataSource(fis.fd)
+                    }
+                    targetUri.scheme == "content" -> {
+                        val pfd = context.contentResolver.openFileDescriptor(targetUri, "r")
+                        if (pfd != null) {
+                            activePfd = pfd
+                            setDataSource(pfd.fileDescriptor)
+                        } else {
+                            setDataSource(context, targetUri)
+                        }
+                    }
+                    else -> {
+                        setDataSource(context, targetUri)
+                    }
                 }
 
                 setOnPreparedListener { mp ->
@@ -159,6 +182,17 @@ class AudioPlayerController(
             mediaPlayer?.release()
         } catch (_: Exception) {}
         mediaPlayer = null
+
+        try {
+            activeFis?.close()
+        } catch (_: Exception) {}
+        activeFis = null
+
+        try {
+            activePfd?.close()
+        } catch (_: Exception) {}
+        activePfd = null
+
         _playbackState.update { it.copy(isPlaying = false, currentPositionMs = 0) }
     }
 

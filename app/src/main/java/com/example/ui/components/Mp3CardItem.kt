@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -66,6 +67,7 @@ fun Mp3CardItem(
     onPlayClick: () -> Unit,
     onAddCoverClick: () -> Unit,
     onDetailClick: () -> Unit,
+    onDeleteClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val borderColor by animateColorAsState(
@@ -286,21 +288,43 @@ fun Mp3CardItem(
                     }
                 }
 
-                // Play / Pause Circle Button
-                IconButton(
-                    onClick = onPlayClick,
-                    modifier = Modifier
-                        .testTag("play_button_${item.id}")
-                        .size(44.dp),
-                    colors = IconButtonDefaults.iconButtonColors(
-                        containerColor = if (isCurrentTrack && isPlaying) ElectricCyan else MaterialTheme.colorScheme.surfaceVariant,
-                        contentColor = if (isCurrentTrack && isPlaying) Color.Black else MaterialTheme.colorScheme.onSurface
-                    )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Icon(
-                        imageVector = if (isCurrentTrack && isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (isCurrentTrack && isPlaying) "Jeda audio" else "Putar audio untuk verifikasi"
-                    )
+                    // Play / Pause Circle Button
+                    IconButton(
+                        onClick = onPlayClick,
+                        modifier = Modifier
+                            .testTag("play_button_${item.id}")
+                            .size(42.dp),
+                        colors = IconButtonDefaults.iconButtonColors(
+                            containerColor = if (isCurrentTrack && isPlaying) ElectricCyan else MaterialTheme.colorScheme.surfaceVariant,
+                            contentColor = if (isCurrentTrack && isPlaying) Color.Black else MaterialTheme.colorScheme.onSurface
+                        )
+                    ) {
+                        Icon(
+                            imageVector = if (isCurrentTrack && isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (isCurrentTrack && isPlaying) "Jeda audio" else "Putar audio untuk verifikasi"
+                        )
+                    }
+
+                    // Delete Button
+                    IconButton(
+                        onClick = onDeleteClick,
+                        modifier = Modifier
+                            .testTag("delete_button_${item.id}")
+                            .size(36.dp),
+                        colors = IconButtonDefaults.iconButtonColors(
+                            contentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.DeleteOutline,
+                            contentDescription = "Hapus file ini",
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
             }
 

@@ -67,7 +67,8 @@ import com.example.model.Mp3Item
 import com.example.mp3.CoverArtGenerator
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.ElectricViolet
-import com.example.ui.theme.EmeraldSuccess
+import androidx.compose.material.icons.outlined.DeleteOutline
+import com.example.ui.theme.RubyError
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -78,6 +79,7 @@ fun CoverPreviewModal(
     onApplyCover: (Mp3Item, ByteArray?, CoverStyle?) -> Unit,
     onPlayAudio: (Mp3Item) -> Unit,
     onExportFile: (Mp3Item, Uri) -> Unit,
+    onDeleteFile: (Mp3Item) -> Unit,
     onDismiss: () -> Unit
 ) {
     if (item == null) return
@@ -354,6 +356,33 @@ fun CoverPreviewModal(
                         Text(text = "Ekspor")
                     }
                 }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Delete File Button
+            OutlinedButton(
+                onClick = {
+                    onDeleteFile(item)
+                    onDismiss()
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("modal_delete_button"),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = RubyError
+                ),
+                border = androidx.compose.foundation.BorderStroke(1.dp, RubyError.copy(alpha = 0.5f))
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.DeleteOutline,
+                    contentDescription = null,
+                    tint = RubyError,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(text = "Hapus File Dari Daftar", color = RubyError, fontWeight = FontWeight.SemiBold)
             }
 
             Spacer(modifier = Modifier.height(24.dp))

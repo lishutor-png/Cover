@@ -206,8 +206,8 @@ object Id3v2Editor {
         val synchsafeSize = toSynchsafe(tagSize)
         System.arraycopy(synchsafeSize, 0, header, 6, 4)
 
-        // Audio payload (everything after previous ID3 header)
-        val audioOffset = inspection.audioDataOffset
+        // Audio payload (everything after previous ID3 header aligned to first MPEG sync frame)
+        val audioOffset = findMpegAudioOffset(sourceBytes, inspection.audioDataOffset)
         val audioLength = sourceBytes.size - audioOffset
 
         val resultOut = ByteArrayOutputStream(header.size + allFrames.size + audioLength)
@@ -218,6 +218,22 @@ object Id3v2Editor {
         }
 
         return resultOut.toByteArray()
+    }
+
+    private fun findMpegAudioOffset(bytes: ByteArray, suggestedOffset: Int): Int {
+        val offset = suggestedOffset.coerceIn(0, bytes.size)
+        if (offset >= bytes.size) return offset
+
+        // Scan forward up to 8192 bytes for the first MPEG sync word (0xFF followed by 0xEx or 0xFx)
+        val maxScan = (offset + 8192).coerceAtMost(bytes.size - 1)
+        for (i in offset until maxScan) {
+            val b0 = bytes[i].toInt() and 0xFF
+            val b1 = bytes[i + 1].toInt() and 0xFF
+            if (b0 == 0xFF && (b1 and 0xE0) == 0xE0) {
+                return i
+            }
+        }
+        return offset
     }
 
     private fun buildApicFrame(imageBytes: ByteArray, mimeType: String): ByteArray {
@@ -239,9 +255,18 @@ object Id3v2Editor {
 
     private fun buildTextFrame(frameId: String, text: String): ByteArray {
         val out = ByteArrayOutputStream()
-        // Text encoding: 0x03 = UTF-8
-        out.write(0x03)
-        out.write(text.toByteArray(Charsets.UTF_8))
+        val isAscii = text.all { it.code in 32..126 }
+        if (isAscii) {
+            // Text encoding: 0x00 = ISO-8859-1
+            out.write(0x00)
+            out.write(text.toByteArray(Charsets.ISO_8859_1))
+        } else {
+            // Text encoding: 0x01 = UTF-16 with BOM
+            out.write(0x01)
+            out.write(0xFF)
+            out.write(0xFE)
+            out.write(text.toByteArray(Charsets.UTF_16LE))
+        }
         return buildFrame(frameId, out.toByteArray())
     }
 

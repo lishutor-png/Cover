@@ -20,25 +20,16 @@ object SampleAudioGenerator {
      */
     private val VALID_MP3_FRAME: ByteArray by lazy {
         val frame = ByteArray(417)
-        // Header: Sync 0xFF 0xFB (MPEG 1.0, Layer 3, no CRC)
-        frame[0] = 0xFF.toByte()
-        frame[1] = 0xFB.toByte()
-        // Bitrate: 128kbps (1001), 44100Hz (00), Padding (0) -> 0x90
-        frame[2] = 0x90.toByte()
-        // Joint stereo, Mode extension, Original -> 0x64
-        frame[3] = 0x64.toByte()
-
-        // Side information for Joint Stereo (32 bytes)
-        // main_data_begin = 0
-        frame[4] = 0x00.toByte()
-        frame[5] = 0x00.toByte()
-        // Channel / granule flags
-        frame[6] = 0x55.toByte()
-        frame[7] = 0x55.toByte()
-
-        // Remainder of frame is silent/minimal Huffman code data
-        for (i in 8 until 417) {
-            frame[i] = if (i % 23 == 0) 0xAA.toByte() else 0x00.toByte()
+        val header = byteArrayOf(
+            0xFF.toByte(), 0xFB.toByte(), 0x90.toByte(), 0x64.toByte(),
+            0x00, 0x0F, 0xF0.toByte(), 0x00, 0x00, 0x69, 0x00, 0x00,
+            0x00, 0x08, 0x00, 0x00, 0x0D, 0x20, 0x00, 0x00,
+            0x01, 0x00, 0x00, 0x01, 0xA4.toByte(), 0x00, 0x00, 0x00,
+            0x20, 0x00, 0x00, 0x34, 0x80.toByte(), 0x00, 0x00, 0x04
+        )
+        System.arraycopy(header, 0, frame, 0, header.size)
+        for (i in header.size until 417) {
+            frame[i] = 0x55.toByte()
         }
         frame
     }
