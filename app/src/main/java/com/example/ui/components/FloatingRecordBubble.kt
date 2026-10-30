@@ -117,6 +117,7 @@ fun FloatingRecordBubble(
     onCloseBubble: () -> Unit,
     onSetSource: (AudioRecordSource) -> Unit,
     onPlayItem: (Mp3Item) -> Unit,
+    onToggleSystemOverlay: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     if (!recorderState.isBubbleVisible) return
@@ -447,8 +448,64 @@ fun FloatingRecordBubble(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 11.sp,
-                        modifier = Modifier.padding(top = 4.dp, bottom = 10.dp)
+                        modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
                     )
+
+                    // System Overlay Toggle Option (Melayang di atas aplikasi lain)
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (recorderState.isSystemOverlayActive) EmeraldSuccess.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (recorderState.isSystemOverlayActive) EmeraldSuccess.copy(alpha = 0.6f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onToggleSystemOverlay() }
+                            .testTag("toggle_system_overlay_bubble_btn")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = if (recorderState.isSystemOverlayActive) Icons.Default.Check else Icons.Default.Audiotrack,
+                                    contentDescription = null,
+                                    tint = if (recorderState.isSystemOverlayActive) EmeraldSuccess else ElectricCyan,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = if (recorderState.isSystemOverlayActive) "Bubble Melayang di Luar Aktif" else "Tampilkan di Atas Aplikasi Lain",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (recorderState.isSystemOverlayActive) EmeraldSuccess else MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = if (recorderState.isSystemOverlayActive) "Buka YouTube/Spotify untuk rekam" else "Bisa merekam saat membuka aplikasi lain",
+                                        fontSize = 10.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Text(
+                                text = if (recorderState.isSystemOverlayActive) "Matikan" else "Aktifkan",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (recorderState.isSystemOverlayActive) RubyError else ElectricCyan
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     // Waveform Equalizer Display
                     Surface(

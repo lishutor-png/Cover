@@ -7,7 +7,10 @@ import androidx.lifecycle.viewModelScope
 import com.example.model.CoverStyle
 import com.example.model.Mp3Item
 import com.example.model.ProcessingStatus
-import com.example.mp3.AudioRecorderHelper
+import android.os.Build
+import android.provider.Settings
+import com.example.mp3.AudioRecorderEngine
+import com.example.mp3.FloatingOverlayService
 import com.example.mp3.Mp3Processor
 import com.example.mp3.RecorderState
 import com.example.mp3.SampleAudioGenerator
@@ -36,8 +39,10 @@ class Mp3ViewModel(application: Application) : AndroidViewModel(application) {
     private val playerController = AudioPlayerController(application, viewModelScope)
     val playbackState: StateFlow<PlaybackState> = playerController.playbackState
 
-    private val audioRecorder = AudioRecorderHelper(application, viewModelScope)
-    val recorderState: StateFlow<RecorderState> = audioRecorder.recorderState
+    val recorderState: StateFlow<RecorderState> = AudioRecorderEngine.recorderState
+
+    private val _overlayPermissionRequired = MutableStateFlow(false)
+    val overlayPermissionRequired: StateFlow<Boolean> = _overlayPermissionRequired.asStateFlow()
 
     private val _tracks = MutableStateFlow<List<Mp3Item>>(emptyList())
     val tracks: StateFlow<List<Mp3Item>> = _tracks.asStateFlow()
@@ -72,6 +77,21 @@ class Mp3ViewModel(application: Application) : AndroidViewModel(application) {
     val userMessage: StateFlow<String?> = _userMessage.asStateFlow()
 
     init {
+        AudioRecorderEngine.init(application)
+
+        // Automatically listen for tracks recorded from system floating overlay over other apps
+        viewModelScope.launch {
+            AudioRecorderEngine.newlyRecordedTracks.collect { item ->
+                _tracks.update { current ->
+                    if (current.none { it.id == item.id }) {
+                        listOf(item) + current
+                    } else {
+                        current
+                    }
+                }
+            }
+        }
+
         // Automatically preload demo sample tracks on first launch so user can test immediately!
         loadSampleTracks()
     }
@@ -90,6 +110,24 @@ class Mp3ViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearUserMessage() {
         _userMessage.value = null
+    }
+
+    fun dismissOverlayPermissionDialog() {
+        _overlayPermissionRequired.value = false
+    }
+
+    fun toggleSystemOverlay(context: android.content.Context) {
+        if (recorderState.value.isSystemOverlayActive) {
+            FloatingOverlayService.stop(context)
+            _userMessage.value = "Bubble di atas aplikasi lain dinonaktifkan."
+        } else {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
+                _overlayPermissionRequired.value = true
+            } else {
+                FloatingOverlayService.start(context)
+                _userMessage.value = "Bubble melayang aktif! Anda dapat membuka aplikasi lain dan merekam suaranya."
+            }
+        }
     }
 
     fun loadSampleTracks() {
@@ -127,82 +165,55 @@ class Mp3ViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun showRecorderBubble() {
-        audioRecorder.showBubble()
+        AudioRecorderEngine.showBubble()
     }
 
     fun hideRecorderBubble() {
-        audioRecorder.hideBubble()
+        AudioRecorderEngine.hideBubble()
     }
 
     fun toggleMinimizeRecorderBubble() {
-        audioRecorder.toggleMinimizeBubble()
+        AudioRecorderEngine.toggleMinimizeBubble()
     }
 
     fun setRecorderSource(source: com.example.mp3.AudioRecordSource) {
-        audioRecorder.setSource(source)
+        AudioRecorderEngine.setSource(source)
     }
 
     fun startInternalAudioRecording(resultCode: Int, data: android.content.Intent): Boolean {
-        return audioRecorder.startInternalAudioRecording(resultCode, data)
+        return AudioRecorderEngine.startInternalAudioRecording(resultCode, data)
     }
 
     fun startMicRecording(): Boolean {
-        // Pause playback if mic recording to prevent feedback loop
         if (playbackState.value.isPlaying) {
             pausePlayback()
         }
-        return audioRecorder.startMicRecording()
+        return AudioRecorderEngine.startMicRecording()
     }
 
     fun pauseRecording() {
-        audioRecorder.pauseRecording()
+        AudioRecorderEngine.pauseRecording()
     }
 
     fun resumeRecording() {
-        audioRecorder.resumeRecording()
+        AudioRecorderEngine.resumeRecording()
     }
 
     fun stopVoiceRecordingAndProcess(autoAddCover: Boolean = true, autoPlayAfterSave: Boolean = false) {
-        viewModelScope.launch {
-            val recordedFile = audioRecorder.stopRecording()
-            if (recordedFile != null && recordedFile.exists() && recordedFile.length() > 0) {
-                val initialItem = Mp3Processor.parseFromUri(getApplication(), Uri.fromFile(recordedFile))
-                _tracks.update { current -> listOf(initialItem) + current }
-
-                if (autoAddCover) {
-                    _batchStatusText.value = "Menyematkan cover otomatis untuk hasil rekaman..."
-                    val processed = Mp3Processor.applyCoverArt(
-                        context = getApplication(),
-                        item = initialItem
-                    )
-                    _tracks.update { list ->
-                        list.map { if (it.id == initialItem.id) processed else it }
-                    }
-                    audioRecorder.setLastRecordedItem(processed)
-                    _userMessage.value = "Rekaman tersimpan jernih & cover estetik berhasil disematkan!"
-                    if (autoPlayAfterSave) {
-                        playTrack(processed)
-                    }
-                } else {
-                    audioRecorder.setLastRecordedItem(initialItem)
-                    _userMessage.value = "Rekaman berhasil disimpan: ${initialItem.fileName}"
-                    if (autoPlayAfterSave) {
-                        playTrack(initialItem)
-                    }
-                }
-            } else {
-                _userMessage.value = "Perekaman dibatalkan atau file tidak berisi suara."
+        AudioRecorderEngine.stopAndSaveRecording(autoAddCover) { item ->
+            if (autoPlayAfterSave && item != null) {
+                playTrack(item)
             }
         }
     }
 
     fun cancelVoiceRecording() {
-        audioRecorder.cancelRecording()
+        AudioRecorderEngine.cancelRecording()
         _userMessage.value = "Sesi rekaman telah dibatalkan."
     }
 
     fun clearLastRecordedItem() {
-        audioRecorder.clearLastRecordedItem()
+        AudioRecorderEngine.clearLastRecordedItem()
     }
 
     /**
@@ -403,6 +414,6 @@ class Mp3ViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         super.onCleared()
         playerController.release()
-        audioRecorder.cancelRecording()
+        AudioRecorderEngine.cancelRecording()
     }
 }

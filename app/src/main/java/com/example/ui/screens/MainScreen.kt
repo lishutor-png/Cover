@@ -1,9 +1,13 @@
 package com.example.ui.screens
 
+import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,6 +32,7 @@ import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Refresh
@@ -65,6 +70,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -88,6 +94,7 @@ fun MainScreen(
     viewModel: Mp3ViewModel,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val allTracks by viewModel.tracks.collectAsState()
     val filteredTracks by viewModel.filteredTracks.collectAsState()
     val filterTab by viewModel.filterTab.collectAsState()
@@ -96,6 +103,7 @@ fun MainScreen(
     val batchStatusText by viewModel.batchStatusText.collectAsState()
     val playbackState by viewModel.playbackState.collectAsState()
     val recorderState by viewModel.recorderState.collectAsState()
+    val overlayPermissionRequired by viewModel.overlayPermissionRequired.collectAsState()
     val selectedDetailItem by viewModel.selectedDetailItem.collectAsState()
     val selectedStyle by viewModel.selectedStyleForDetail.collectAsState()
     val userMessage by viewModel.userMessage.collectAsState()
@@ -160,6 +168,18 @@ fun MainScreen(
                         }
                     },
                     actions = {
+                        // Quick toggle for System Floating Bubble (Over other apps)
+                        IconButton(
+                            onClick = { viewModel.toggleSystemOverlay(context) },
+                            modifier = Modifier.testTag("toggle_system_overlay_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Layers,
+                                contentDescription = "Aktifkan Bubble Melayang di Luar Aplikasi",
+                                tint = if (recorderState.isSystemOverlayActive) EmeraldSuccess else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
                         // Quick toggle for Recording Bubble
                         IconButton(
                             onClick = {
@@ -401,6 +421,82 @@ fun MainScreen(
                     }
                 }
 
+                // Banner for System Floating Bubble over other apps (Merekam Audio Spotify/YouTube/Game)
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.toggleSystemOverlay(context) }
+                            .testTag("system_overlay_banner_card"),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (recorderState.isSystemOverlayActive) EmeraldSuccess.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (recorderState.isSystemOverlayActive) EmeraldSuccess.copy(alpha = 0.6f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = if (recorderState.isSystemOverlayActive) EmeraldSuccess.copy(alpha = 0.2f) else ElectricCyan.copy(alpha = 0.2f),
+                                    modifier = Modifier.size(40.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Default.Layers,
+                                            contentDescription = null,
+                                            tint = if (recorderState.isSystemOverlayActive) EmeraldSuccess else ElectricCyan,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = if (recorderState.isSystemOverlayActive) "Bubble Melayang di Layar: AKTIF" else "Rekam Suara dari Aplikasi Lain",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (recorderState.isSystemOverlayActive) EmeraldSuccess else MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = if (recorderState.isSystemOverlayActive) "Buka YouTube, Spotify, atau game untuk merekam!" else "Aktifkan bubble melayang di atas Spotify/YouTube",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Button(
+                                onClick = { viewModel.toggleSystemOverlay(context) },
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (recorderState.isSystemOverlayActive) RubyError else ElectricViolet
+                                ),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                modifier = Modifier.testTag("action_toggle_overlay_banner_btn")
+                            ) {
+                                Text(
+                                    text = if (recorderState.isSystemOverlayActive) "Matikan" else "Aktifkan",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // Quick Actions Row: Pilih File, Bubble Rekam, and Contoh MP3
                 item {
                     Row(
@@ -601,9 +697,64 @@ fun MainScreen(
             onCloseBubble = { viewModel.hideRecorderBubble() },
             onSetSource = { viewModel.setRecorderSource(it) },
             onPlayItem = { viewModel.playTrack(it) },
+            onToggleSystemOverlay = { viewModel.toggleSystemOverlay(context) },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(bottom = 74.dp) // Stay right above the AudioPlayerBar
+        )
+    }
+
+    // Overlay Permission Explanation Dialog
+    if (overlayPermissionRequired) {
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissOverlayPermissionDialog() },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Layers,
+                    contentDescription = null,
+                    tint = ElectricViolet,
+                    modifier = Modifier.size(32.dp)
+                )
+            },
+            title = {
+                Text(text = "Izin Tampilkan di Atas Aplikasi Lain")
+            },
+            text = {
+                Text(
+                    text = "Agar bubble perekam dapat melayang di atas aplikasi lain (seperti YouTube, Spotify, atau game) dan merekam suara yang sedang dimainkan, silakan berikan izin 'Display over other apps' di Pengaturan.\n\nKetuk 'Buka Pengaturan', lalu aktifkan sakelar untuk CoverCraft MP3."
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.dismissOverlayPermissionDialog()
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            try {
+                                val intent = Intent(
+                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    Uri.parse("package:${context.packageName}")
+                                )
+                                context.startActivity(intent)
+                            } catch (_: Exception) {
+                                val fallbackIntent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+                                context.startActivity(fallbackIntent)
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ElectricViolet),
+                    modifier = Modifier.testTag("grant_overlay_permission_btn")
+                ) {
+                    Text("Buka Pengaturan")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = { viewModel.dismissOverlayPermissionDialog() },
+                    modifier = Modifier.testTag("dismiss_overlay_permission_btn")
+                ) {
+                    Text("Batal")
+                }
+            }
         )
     }
 

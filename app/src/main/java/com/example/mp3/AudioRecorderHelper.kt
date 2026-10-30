@@ -9,18 +9,25 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
+import android.net.Uri
 import android.os.Build
 import android.util.Log
+import android.widget.Toast
 import com.example.model.Mp3Item
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -49,14 +56,22 @@ data class RecorderState(
     val errorMessage: String? = null,
     val isBubbleVisible: Boolean = false,
     val isBubbleMinimized: Boolean = false,
+    val isSystemOverlayActive: Boolean = false,
     val lastRecordedItem: Mp3Item? = null
 )
 
-class AudioRecorderHelper(
-    private val context: Context,
-    private val scope: CoroutineScope
-) {
-    private val TAG = "AudioRecorderHelper"
+/**
+ * Global recording engine singleton shared across in-app UI and background system floating overlay.
+ */
+object AudioRecorderEngine {
+    private const val TAG = "AudioRecorderEngine"
+
+    const val SAMPLE_RATE = 48000
+    const val CHANNEL_COUNT = 2
+    const val BIT_RATE = 192000
+
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var appContext: Context? = null
 
     private var audioRecord: AudioRecord? = null
     private var pcmToAacMuxer: PcmToAacMuxer? = null
@@ -68,10 +83,17 @@ class AudioRecorderHelper(
     private val _recorderState = MutableStateFlow(RecorderState())
     val recorderState: StateFlow<RecorderState> = _recorderState.asStateFlow()
 
-    companion object {
-        const val SAMPLE_RATE = 48000
-        const val CHANNEL_COUNT = 2
-        const val BIT_RATE = 192000
+    private val _newlyRecordedTracks = MutableSharedFlow<Mp3Item>(extraBufferCapacity = 10)
+    val newlyRecordedTracks: SharedFlow<Mp3Item> = _newlyRecordedTracks.asSharedFlow()
+
+    fun init(context: Context) {
+        if (appContext == null) {
+            appContext = context.applicationContext
+        }
+    }
+
+    fun setSystemOverlayActive(active: Boolean) {
+        _recorderState.value = _recorderState.value.copy(isSystemOverlayActive = active)
     }
 
     fun showBubble() {
@@ -85,7 +107,6 @@ class AudioRecorderHelper(
         if (!_recorderState.value.isRecording) {
             _recorderState.value = _recorderState.value.copy(isBubbleVisible = false)
         } else {
-            // If recording, minimize instead of closing completely so user doesn't lose progress
             _recorderState.value = _recorderState.value.copy(isBubbleMinimized = true)
         }
     }
@@ -110,10 +131,21 @@ class AudioRecorderHelper(
         _recorderState.value = _recorderState.value.copy(lastRecordedItem = item)
     }
 
+    fun onInternalAudioPermissionFailed(reason: String) {
+        _recorderState.value = _recorderState.value.copy(
+            isRecording = false,
+            errorMessage = reason
+        )
+        appContext?.let {
+            Toast.makeText(it, "Perekam: $reason", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     /**
      * Starts internal audio capture using MediaProjection (AudioPlaybackCapture API).
      */
     fun startInternalAudioRecording(resultCode: Int, data: Intent): Boolean {
+        val context = appContext ?: return false
         stopCurrentSession()
 
         try {
@@ -159,6 +191,7 @@ class AudioRecorderHelper(
      * Starts microphone recording in HD (48kHz, stereo AAC).
      */
     fun startMicRecording(): Boolean {
+        val context = appContext ?: return false
         stopCurrentSession()
 
         try {
@@ -227,6 +260,7 @@ class AudioRecorderHelper(
     }
 
     private fun beginRecordingStream(record: AudioRecord, source: AudioRecordSource): Boolean {
+        val context = appContext ?: return false
         try {
             val recordDir = File(context.filesDir, "recordings")
             if (!recordDir.exists()) recordDir.mkdirs()
@@ -287,10 +321,8 @@ class AudioRecorderHelper(
 
                 val read = record.read(buffer, 0, buffer.size)
                 if (read > 0) {
-                    // Feed to AAC encoder
                     muxer.feedPcmData(buffer, read, isEndOfStream = false)
 
-                    // Calculate amplitude for real-time waveform visualizer
                     var maxAmp = 0
                     for (i in 0 until read step 2) {
                         val sample = (buffer[i].toInt() and 0xFF) or (buffer[i + 1].toInt() shl 8)
@@ -348,7 +380,7 @@ class AudioRecorderHelper(
         val finishedFile = pcmToAacMuxer?.finishAndRelease()
         pcmToAacMuxer = null
 
-        AudioCaptureForegroundService.stop(context)
+        appContext?.let { AudioCaptureForegroundService.stop(it) }
 
         _recorderState.value = _recorderState.value.copy(
             isRecording = false,
@@ -363,6 +395,49 @@ class AudioRecorderHelper(
             finishedFile
         } else {
             activeOutputFile?.let { if (it.exists() && it.length() > 0) it else null }
+        }
+    }
+
+    /**
+     * Stops the active recording, parses metadata, generates and embeds cover art,
+     * emits the new Mp3Item to listeners, and displays an informative toast.
+     */
+    fun stopAndSaveRecording(
+        autoAddCover: Boolean = true,
+        onComplete: ((Mp3Item?) -> Unit)? = null
+    ) {
+        val context = appContext ?: return
+        scope.launch(Dispatchers.IO) {
+            val recordedFile = stopRecording()
+            if (recordedFile != null && recordedFile.exists() && recordedFile.length() > 0) {
+                val initialItem = Mp3Processor.parseFromUri(context, Uri.fromFile(recordedFile))
+                val finalItem = if (autoAddCover) {
+                    val processed = Mp3Processor.applyCoverArt(
+                        context = context,
+                        item = initialItem
+                    )
+                    processed
+                } else {
+                    initialItem
+                }
+
+                setLastRecordedItem(finalItem)
+                _newlyRecordedTracks.emit(finalItem)
+
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        context,
+                        "Rekaman '${finalItem.title}' berhasil disimpan & diberi cover!",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    onComplete?.invoke(finalItem)
+                }
+            } else {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Perekaman dibatalkan atau file kosong.", Toast.LENGTH_SHORT).show()
+                    onComplete?.invoke(null)
+                }
+            }
         }
     }
 
@@ -389,7 +464,7 @@ class AudioRecorderHelper(
         pcmToAacMuxer?.finishAndRelease()
         pcmToAacMuxer = null
 
-        AudioCaptureForegroundService.stop(context)
+        appContext?.let { AudioCaptureForegroundService.stop(it) }
 
         activeOutputFile?.delete()
         activeOutputFile = null
