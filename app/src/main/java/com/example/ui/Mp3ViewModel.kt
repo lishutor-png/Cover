@@ -126,35 +126,83 @@ class Mp3ViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun startVoiceRecording(): Boolean {
-        // Stop playback if playing
+    fun showRecorderBubble() {
+        audioRecorder.showBubble()
+    }
+
+    fun hideRecorderBubble() {
+        audioRecorder.hideBubble()
+    }
+
+    fun toggleMinimizeRecorderBubble() {
+        audioRecorder.toggleMinimizeBubble()
+    }
+
+    fun setRecorderSource(source: com.example.mp3.AudioRecordSource) {
+        audioRecorder.setSource(source)
+    }
+
+    fun startInternalAudioRecording(resultCode: Int, data: android.content.Intent): Boolean {
+        return audioRecorder.startInternalAudioRecording(resultCode, data)
+    }
+
+    fun startMicRecording(): Boolean {
+        // Pause playback if mic recording to prevent feedback loop
         if (playbackState.value.isPlaying) {
             pausePlayback()
         }
-        return audioRecorder.startRecording()
+        return audioRecorder.startMicRecording()
     }
 
-    fun stopVoiceRecordingAndProcess(autoAddCover: Boolean = true) {
+    fun pauseRecording() {
+        audioRecorder.pauseRecording()
+    }
+
+    fun resumeRecording() {
+        audioRecorder.resumeRecording()
+    }
+
+    fun stopVoiceRecordingAndProcess(autoAddCover: Boolean = true, autoPlayAfterSave: Boolean = false) {
         viewModelScope.launch {
             val recordedFile = audioRecorder.stopRecording()
-            if (recordedFile != null && recordedFile.exists()) {
-                val item = Mp3Processor.parseFromUri(getApplication(), Uri.fromFile(recordedFile))
-                _tracks.update { current -> listOf(item) + current }
+            if (recordedFile != null && recordedFile.exists() && recordedFile.length() > 0) {
+                val initialItem = Mp3Processor.parseFromUri(getApplication(), Uri.fromFile(recordedFile))
+                _tracks.update { current -> listOf(initialItem) + current }
 
                 if (autoAddCover) {
-                    _userMessage.value = "Rekaman selesai! Menyematkan cover otomatis..."
-                    processSingleItem(item)
+                    _batchStatusText.value = "Menyematkan cover otomatis untuk hasil rekaman..."
+                    val processed = Mp3Processor.applyCoverArt(
+                        context = getApplication(),
+                        item = initialItem
+                    )
+                    _tracks.update { list ->
+                        list.map { if (it.id == initialItem.id) processed else it }
+                    }
+                    audioRecorder.setLastRecordedItem(processed)
+                    _userMessage.value = "Rekaman tersimpan jernih & cover estetik berhasil disematkan!"
+                    if (autoPlayAfterSave) {
+                        playTrack(processed)
+                    }
                 } else {
-                    _userMessage.value = "Rekaman berhasil disimpan: ${item.fileName}"
+                    audioRecorder.setLastRecordedItem(initialItem)
+                    _userMessage.value = "Rekaman berhasil disimpan: ${initialItem.fileName}"
+                    if (autoPlayAfterSave) {
+                        playTrack(initialItem)
+                    }
                 }
             } else {
-                _userMessage.value = "Perekaman dibatalkan atau file tidak tersimpan."
+                _userMessage.value = "Perekaman dibatalkan atau file tidak berisi suara."
             }
         }
     }
 
     fun cancelVoiceRecording() {
         audioRecorder.cancelRecording()
+        _userMessage.value = "Sesi rekaman telah dibatalkan."
+    }
+
+    fun clearLastRecordedItem() {
+        audioRecorder.clearLastRecordedItem()
     }
 
     /**

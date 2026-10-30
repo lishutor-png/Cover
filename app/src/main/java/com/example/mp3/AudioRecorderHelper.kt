@@ -1,8 +1,17 @@
 package com.example.mp3
 
 import android.content.Context
+import android.content.Intent
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioPlaybackCaptureConfiguration
+import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.util.Log
+import com.example.model.Mp3Item
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -16,70 +25,303 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
+
+enum class AudioRecordSource(val label: String, val description: String) {
+    INTERNAL_APP(
+        label = "Audio Aplikasi (Internal)",
+        description = "Merekam output audio aplikasi/musik/game secara jernih tanpa bising luar"
+    ),
+    MICROPHONE(
+        label = "Mikrofon HD",
+        description = "Merekam suara vokal dari mikrofon dengan fidelitas tinggi 48kHz"
+    )
+}
 
 data class RecorderState(
     val isRecording: Boolean = false,
+    val isPaused: Boolean = false,
+    val source: AudioRecordSource = AudioRecordSource.INTERNAL_APP,
     val elapsedSeconds: Int = 0,
+    val currentAmplitude: Float = 0f,
+    val waveformHistory: List<Float> = List(16) { 0.08f },
     val currentFile: File? = null,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val isBubbleVisible: Boolean = false,
+    val isBubbleMinimized: Boolean = false,
+    val lastRecordedItem: Mp3Item? = null
 )
 
 class AudioRecorderHelper(
     private val context: Context,
     private val scope: CoroutineScope
 ) {
-    private var mediaRecorder: MediaRecorder? = null
+    private val TAG = "AudioRecorderHelper"
+
+    private var audioRecord: AudioRecord? = null
+    private var pcmToAacMuxer: PcmToAacMuxer? = null
+    private var mediaProjection: MediaProjection? = null
+    private var recordingJob: Job? = null
     private var timerJob: Job? = null
     private var activeOutputFile: File? = null
 
     private val _recorderState = MutableStateFlow(RecorderState())
     val recorderState: StateFlow<RecorderState> = _recorderState.asStateFlow()
 
-    fun startRecording(): Boolean {
-        stopRecording()
+    companion object {
+        const val SAMPLE_RATE = 48000
+        const val CHANNEL_COUNT = 2
+        const val BIT_RATE = 192000
+    }
 
+    fun showBubble() {
+        _recorderState.value = _recorderState.value.copy(
+            isBubbleVisible = true,
+            isBubbleMinimized = false
+        )
+    }
+
+    fun hideBubble() {
+        if (!_recorderState.value.isRecording) {
+            _recorderState.value = _recorderState.value.copy(isBubbleVisible = false)
+        } else {
+            // If recording, minimize instead of closing completely so user doesn't lose progress
+            _recorderState.value = _recorderState.value.copy(isBubbleMinimized = true)
+        }
+    }
+
+    fun toggleMinimizeBubble() {
+        _recorderState.value = _recorderState.value.copy(
+            isBubbleMinimized = !_recorderState.value.isBubbleMinimized
+        )
+    }
+
+    fun setSource(source: AudioRecordSource) {
+        if (!_recorderState.value.isRecording) {
+            _recorderState.value = _recorderState.value.copy(source = source, errorMessage = null)
+        }
+    }
+
+    fun clearLastRecordedItem() {
+        _recorderState.value = _recorderState.value.copy(lastRecordedItem = null)
+    }
+
+    fun setLastRecordedItem(item: Mp3Item) {
+        _recorderState.value = _recorderState.value.copy(lastRecordedItem = item)
+    }
+
+    /**
+     * Starts internal audio capture using MediaProjection (AudioPlaybackCapture API).
+     */
+    fun startInternalAudioRecording(resultCode: Int, data: Intent): Boolean {
+        stopCurrentSession()
+
+        try {
+            AudioCaptureForegroundService.start(context)
+
+            val projectionManager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
+            if (projectionManager == null) {
+                _recorderState.value = _recorderState.value.copy(
+                    errorMessage = "MediaProjectionManager tidak tersedia pada perangkat ini."
+                )
+                return false
+            }
+
+            val projection = projectionManager.getMediaProjection(resultCode, data)
+            if (projection == null) {
+                _recorderState.value = _recorderState.value.copy(
+                    errorMessage = "Izin merekam audio internal ditolak atau tidak valid."
+                )
+                return false
+            }
+            mediaProjection = projection
+
+            val record = createInternalAudioRecord(projection)
+            if (record == null) {
+                _recorderState.value = _recorderState.value.copy(
+                    errorMessage = "Gagal membuat AudioRecord untuk AudioPlaybackCapture."
+                )
+                return false
+            }
+
+            return beginRecordingStream(record, AudioRecordSource.INTERNAL_APP)
+        } catch (e: Exception) {
+            Log.e(TAG, "Gagal memulai internal audio recording", e)
+            _recorderState.value = _recorderState.value.copy(
+                isRecording = false,
+                errorMessage = "Gagal merekam audio aplikasi: ${e.localizedMessage}"
+            )
+            return false
+        }
+    }
+
+    /**
+     * Starts microphone recording in HD (48kHz, stereo AAC).
+     */
+    fun startMicRecording(): Boolean {
+        stopCurrentSession()
+
+        try {
+            val minBuf = AudioRecord.getMinBufferSize(
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_STEREO,
+                AudioFormat.ENCODING_PCM_16BIT
+            )
+            val bufferSize = minBuf.coerceAtLeast(16384)
+
+            val record = AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_STEREO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize
+            )
+
+            if (record.state != AudioRecord.STATE_INITIALIZED) {
+                _recorderState.value = _recorderState.value.copy(
+                    errorMessage = "Mikrofon tidak dapat diinisialisasi atau sedang digunakan aplikasi lain."
+                )
+                return false
+            }
+
+            return beginRecordingStream(record, AudioRecordSource.MICROPHONE)
+        } catch (e: Exception) {
+            Log.e(TAG, "Gagal memulai mic recording", e)
+            _recorderState.value = _recorderState.value.copy(
+                isRecording = false,
+                errorMessage = "Gagal memulai mikrofon: ${e.localizedMessage}"
+            )
+            return false
+        }
+    }
+
+    private fun createInternalAudioRecord(projection: MediaProjection): AudioRecord? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return null
+        }
+
+        val config = AudioPlaybackCaptureConfiguration.Builder(projection)
+            .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
+            .addMatchingUsage(AudioAttributes.USAGE_GAME)
+            .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
+            .build()
+
+        val minBuf = AudioRecord.getMinBufferSize(
+            SAMPLE_RATE,
+            AudioFormat.CHANNEL_IN_STEREO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+        val bufferSize = minBuf.coerceAtLeast(16384)
+
+        return AudioRecord.Builder()
+            .setAudioPlaybackCaptureConfig(config)
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(SAMPLE_RATE)
+                    .setChannelMask(AudioFormat.CHANNEL_IN_STEREO)
+                    .build()
+            )
+            .setBufferSizeInBytes(bufferSize)
+            .build()
+    }
+
+    private fun beginRecordingStream(record: AudioRecord, source: AudioRecordSource): Boolean {
         try {
             val recordDir = File(context.filesDir, "recordings")
             if (!recordDir.exists()) recordDir.mkdirs()
 
+            val prefix = if (source == AudioRecordSource.INTERNAL_APP) "Audio_Aplikasi" else "Suara_Mic"
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-            val file = File(recordDir, "Rekaman_$timestamp.m4a")
+            val file = File(recordDir, "${prefix}_$timestamp.m4a")
             activeOutputFile = file
 
-            val recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                MediaRecorder(context)
-            } else {
-                @Suppress("DEPRECATION")
-                MediaRecorder()
-            }
+            val muxer = PcmToAacMuxer(
+                outputFile = file,
+                sampleRate = SAMPLE_RATE,
+                channelCount = CHANNEL_COUNT,
+                bitRate = BIT_RATE
+            )
+            muxer.init()
+            pcmToAacMuxer = muxer
 
-            recorder.apply {
-                setAudioSource(MediaRecorder.AudioSource.MIC)
-                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setAudioSamplingRate(44100)
-                setAudioEncodingBitRate(128000)
-                setOutputFile(file.absolutePath)
-                prepare()
-                start()
-            }
+            record.startRecording()
+            audioRecord = record
 
-            mediaRecorder = recorder
-            _recorderState.value = RecorderState(
+            _recorderState.value = _recorderState.value.copy(
                 isRecording = true,
+                isPaused = false,
+                source = source,
                 elapsedSeconds = 0,
                 currentFile = file,
-                errorMessage = null
+                errorMessage = null,
+                isBubbleVisible = true
             )
 
             startTimer()
+            startAudioStreamPump(record, muxer)
+
             return true
         } catch (e: Exception) {
-            _recorderState.value = RecorderState(
+            Log.e(TAG, "Gagal memulai stream perekaman", e)
+            _recorderState.value = _recorderState.value.copy(
                 isRecording = false,
-                errorMessage = "Gagal memulai perekam audio: ${e.localizedMessage ?: "Izin atau mik tidak tersedia"}"
+                errorMessage = "Gagal memulai perekam: ${e.localizedMessage}"
             )
+            stopCurrentSession()
             return false
+        }
+    }
+
+    private fun startAudioStreamPump(record: AudioRecord, muxer: PcmToAacMuxer) {
+        recordingJob?.cancel()
+        recordingJob = scope.launch(Dispatchers.IO) {
+            val buffer = ByteArray(4096)
+            val history = ArrayDeque<Float>(List(16) { 0.08f })
+
+            while (isActive) {
+                if (_recorderState.value.isPaused) {
+                    delay(50)
+                    continue
+                }
+
+                val read = record.read(buffer, 0, buffer.size)
+                if (read > 0) {
+                    // Feed to AAC encoder
+                    muxer.feedPcmData(buffer, read, isEndOfStream = false)
+
+                    // Calculate amplitude for real-time waveform visualizer
+                    var maxAmp = 0
+                    for (i in 0 until read step 2) {
+                        val sample = (buffer[i].toInt() and 0xFF) or (buffer[i + 1].toInt() shl 8)
+                        val absVal = abs(sample.toShort().toInt())
+                        if (absVal > maxAmp) maxAmp = absVal
+                    }
+                    val normalized = (maxAmp / 32768f).coerceIn(0.08f, 1f)
+
+                    history.removeFirst()
+                    history.addLast(normalized)
+
+                    _recorderState.value = _recorderState.value.copy(
+                        currentAmplitude = normalized,
+                        waveformHistory = history.toList()
+                    )
+                } else if (read < 0) {
+                    delay(20)
+                }
+            }
+        }
+    }
+
+    fun pauseRecording() {
+        if (_recorderState.value.isRecording && !_recorderState.value.isPaused) {
+            _recorderState.value = _recorderState.value.copy(isPaused = true)
+        }
+    }
+
+    fun resumeRecording() {
+        if (_recorderState.value.isRecording && _recorderState.value.isPaused) {
+            _recorderState.value = _recorderState.value.copy(isPaused = false)
         }
     }
 
@@ -87,49 +329,84 @@ class AudioRecorderHelper(
         timerJob?.cancel()
         timerJob = null
 
-        val recorded = activeOutputFile
-        try {
-            mediaRecorder?.apply {
-                stop()
-                release()
-            }
-        } catch (_: Exception) {}
-        mediaRecorder = null
+        recordingJob?.cancel()
+        recordingJob = null
 
-        _recorderState.value = RecorderState(
+        try {
+            audioRecord?.stop()
+        } catch (_: Exception) {}
+        try {
+            audioRecord?.release()
+        } catch (_: Exception) {}
+        audioRecord = null
+
+        try {
+            mediaProjection?.stop()
+        } catch (_: Exception) {}
+        mediaProjection = null
+
+        val finishedFile = pcmToAacMuxer?.finishAndRelease()
+        pcmToAacMuxer = null
+
+        AudioCaptureForegroundService.stop(context)
+
+        _recorderState.value = _recorderState.value.copy(
             isRecording = false,
+            isPaused = false,
             elapsedSeconds = 0,
+            currentAmplitude = 0f,
             currentFile = null,
-            errorMessage = null
+            waveformHistory = List(16) { 0.08f }
         )
 
-        return if (recorded != null && recorded.exists() && recorded.length() > 0) {
-            recorded
+        return if (finishedFile != null && finishedFile.exists() && finishedFile.length() > 0) {
+            finishedFile
         } else {
-            null
+            activeOutputFile?.let { if (it.exists() && it.length() > 0) it else null }
         }
     }
 
     fun cancelRecording() {
         timerJob?.cancel()
         timerJob = null
+
+        recordingJob?.cancel()
+        recordingJob = null
+
         try {
-            mediaRecorder?.apply {
-                stop()
-                release()
-            }
+            audioRecord?.stop()
         } catch (_: Exception) {}
-        mediaRecorder = null
+        try {
+            audioRecord?.release()
+        } catch (_: Exception) {}
+        audioRecord = null
+
+        try {
+            mediaProjection?.stop()
+        } catch (_: Exception) {}
+        mediaProjection = null
+
+        pcmToAacMuxer?.finishAndRelease()
+        pcmToAacMuxer = null
+
+        AudioCaptureForegroundService.stop(context)
 
         activeOutputFile?.delete()
         activeOutputFile = null
 
-        _recorderState.value = RecorderState(
+        _recorderState.value = _recorderState.value.copy(
             isRecording = false,
+            isPaused = false,
             elapsedSeconds = 0,
+            currentAmplitude = 0f,
             currentFile = null,
+            waveformHistory = List(16) { 0.08f },
             errorMessage = null
         )
+    }
+
+    private fun stopCurrentSession() {
+        cancelRecording()
     }
 
     private fun startTimer() {
@@ -138,8 +415,10 @@ class AudioRecorderHelper(
             var seconds = 0
             while (isActive) {
                 delay(1000)
-                seconds++
-                _recorderState.value = _recorderState.value.copy(elapsedSeconds = seconds)
+                if (!_recorderState.value.isPaused) {
+                    seconds++
+                    _recorderState.value = _recorderState.value.copy(elapsedSeconds = seconds)
+                }
             }
         }
     }
