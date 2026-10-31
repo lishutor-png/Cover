@@ -32,7 +32,13 @@ data class Mp3Item(
     val isSample: Boolean = false,
     val sampleRate: Int = 44100,
     val bitrateKbps: Int = 128,
-    val audioFormat: AudioFormat = AudioFormat.MP3
+    val audioFormat: AudioFormat = AudioFormat.MP3,
+    val recordedAt: Long? = null,
+    val recordSource: String? = null,
+    val volumeBoostPercent: Int = 130,
+    val channelInfo: String = "Stereo (2 Ch)",
+    val isRecordedTrack: Boolean = false,
+    val savedPathInfo: String? = null
 ) {
     val effectiveCoverBytes: ByteArray?
         get() = processedCoverBytes ?: originalCoverBytes
@@ -59,6 +65,15 @@ data class Mp3Item(
                 "%.2f MB".format(kb / 1024.0)
             }
         }
+
+    val formattedRecordedDate: String?
+        get() = if (recordedAt != null && recordedAt > 0) {
+            try {
+                java.text.SimpleDateFormat("dd MMM yyyy, HH:mm", java.util.Locale("id", "ID")).format(java.util.Date(recordedAt))
+            } catch (_: Exception) {
+                null
+            }
+        } else null
 
     val needsCover: Boolean
         get() = !hasOriginalCover && !hasProcessedCover

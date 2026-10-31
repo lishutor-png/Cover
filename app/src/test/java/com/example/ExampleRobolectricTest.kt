@@ -23,7 +23,19 @@ class ExampleRobolectricTest {
     fun `read string from context`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val appName = context.getString(R.string.app_name)
-        assertEquals("CoverCraft MP3", appName)
+        assertEquals("recLish", appName)
+    }
+
+    @Test
+    fun `test volume boost 130 percent clamping`() {
+        val multiplier = 1.30f
+        val originalSample: Short = 1000
+        val boosted = (originalSample * multiplier).toInt().coerceIn(-32768, 32767).toShort()
+        assertEquals(1300.toShort(), boosted)
+
+        val nearMaxSample: Short = 30000
+        val maxBoosted = (nearMaxSample * multiplier).toInt().coerceIn(-32768, 32767).toShort()
+        assertEquals(32767.toShort(), maxBoosted)
     }
 
     @Test

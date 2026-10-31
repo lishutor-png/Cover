@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "CoverCraft MP3"
+rootProject.name = "recLish"
 
 include(":app")

@@ -118,7 +118,7 @@ object Mp3Processor {
         val fallbackTitle = displayName.substringBeforeLast('.').ifBlank { "Rekaman Audio" }
         val finalTitle = title?.ifBlank { fallbackTitle } ?: fallbackTitle
         val finalArtist = artist?.ifBlank { if (format == AudioFormat.M4A) "Rekaman Suara" else "Artis Tidak Diketahui" } ?: "Artis Tidak Diketahui"
-        val finalAlbum = album?.ifBlank { "CoverCraft Album" } ?: "CoverCraft Album"
+        val finalAlbum = album?.ifBlank { "recLish Album" } ?: "recLish Album"
 
         val effectiveOriginalCover = existingCover ?: retrieverCover
         val hasOriginalCover = effectiveOriginalCover != null && effectiveOriginalCover.isNotEmpty()
@@ -211,6 +211,39 @@ object Mp3Processor {
 
             val processedUri = Uri.fromFile(outputFile)
 
+            // 1. If source URI is writable, write cover directly back to source file!
+            if (item.uri.scheme == "file") {
+                try {
+                    val origFile = File(item.uri.path ?: "")
+                    if (origFile.exists() && origFile.canWrite()) {
+                        FileOutputStream(origFile).use { it.write(modifiedBytes) }
+                    }
+                } catch (_: Exception) {}
+            } else if (item.uri.scheme == "content") {
+                try {
+                    context.contentResolver.openOutputStream(item.uri, "wt")?.use { out ->
+                        out.write(modifiedBytes)
+                    }
+                } catch (_: Exception) {}
+            }
+
+            // 2. Also save to public Music/recLish folder so device's music players immediately index the cover
+            var publicSavedPath: String? = null
+            try {
+                val musicDir = File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_MUSIC), "recLish")
+                if (!musicDir.exists()) musicDir.mkdirs()
+                val publicFile = File(musicDir, cleanName)
+                FileOutputStream(publicFile).use { it.write(modifiedBytes) }
+                publicSavedPath = publicFile.absolutePath
+
+                android.media.MediaScannerConnection.scanFile(
+                    context,
+                    arrayOf(publicFile.absolutePath, outputFile.absolutePath),
+                    arrayOf(if (format == AudioFormat.M4A) "audio/mp4" else "audio/mpeg"),
+                    null
+                )
+            } catch (_: Exception) {}
+
             // Verify with MediaMetadataRetriever that the new file has valid cover and metadata
             var verifiedDuration = item.durationMs
             val verifyRetriever = MediaMetadataRetriever()
@@ -231,7 +264,8 @@ object Mp3Processor {
                 sizeBytes = outputFile.length(),
                 status = ProcessingStatus.SUCCESS,
                 errorMessage = null,
-                audioFormat = format
+                audioFormat = format,
+                savedPathInfo = publicSavedPath ?: outputFile.absolutePath
             )
         } catch (t: Throwable) {
             item.copy(

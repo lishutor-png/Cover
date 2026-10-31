@@ -7,10 +7,12 @@ import android.media.AudioFormat
 import android.media.AudioPlaybackCaptureConfiguration
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.MediaScannerConnection
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.util.Log
 import android.widget.Toast
 import com.example.model.Mp3Item
@@ -29,6 +31,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -57,6 +60,7 @@ data class RecorderState(
     val isBubbleVisible: Boolean = false,
     val isBubbleMinimized: Boolean = false,
     val isSystemOverlayActive: Boolean = false,
+    val isCaptureAuthorized: Boolean = false,
     val lastRecordedItem: Mp3Item? = null
 )
 
@@ -69,6 +73,7 @@ object AudioRecorderEngine {
     const val SAMPLE_RATE = 48000
     const val CHANNEL_COUNT = 2
     const val BIT_RATE = 192000
+    const val VOLUME_BOOST_MULTIPLIER = 1.30f // Boost volume by 130%
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var appContext: Context? = null
@@ -79,6 +84,10 @@ object AudioRecorderEngine {
     private var recordingJob: Job? = null
     private var timerJob: Job? = null
     private var activeOutputFile: File? = null
+    private var activeSource: AudioRecordSource = AudioRecordSource.INTERNAL_APP
+
+    // Cached pre-authorized MediaProjection token so user doesn't have to confirm transmission when hitting record!
+    private var preAuthorizedToken: Pair<Int, Intent>? = null
 
     private val _recorderState = MutableStateFlow(RecorderState())
     val recorderState: StateFlow<RecorderState> = _recorderState.asStateFlow()
@@ -131,6 +140,15 @@ object AudioRecorderEngine {
         _recorderState.value = _recorderState.value.copy(lastRecordedItem = item)
     }
 
+    fun setPreAuthorizedToken(resultCode: Int, data: Intent) {
+        preAuthorizedToken = Pair(resultCode, data)
+        _recorderState.value = _recorderState.value.copy(isCaptureAuthorized = true)
+    }
+
+    fun hasPreAuthorizedToken(): Boolean = preAuthorizedToken != null
+
+    fun getPreAuthorizedToken(): Pair<Int, Intent>? = preAuthorizedToken
+
     fun onInternalAudioPermissionFailed(reason: String) {
         _recorderState.value = _recorderState.value.copy(
             isRecording = false,
@@ -142,11 +160,29 @@ object AudioRecorderEngine {
     }
 
     /**
-     * Starts internal audio capture using MediaProjection (AudioPlaybackCapture API).
+     * Starts internal audio capture using cached pre-authorized token or provided token.
      */
-    fun startInternalAudioRecording(resultCode: Int, data: Intent): Boolean {
+    fun startInternalAudioRecording(resultCode: Int? = null, data: Intent? = null): Boolean {
         val context = appContext ?: return false
         stopCurrentSession()
+
+        val finalCode: Int
+        val finalIntent: Intent
+
+        if (resultCode != null && data != null) {
+            finalCode = resultCode
+            finalIntent = data
+            setPreAuthorizedToken(resultCode, data)
+        } else {
+            val token = preAuthorizedToken
+            if (token != null) {
+                finalCode = token.first
+                finalIntent = token.second
+            } else {
+                CapturePermissionActivity.launch(context, autoStart = true)
+                return false
+            }
+        }
 
         try {
             AudioCaptureForegroundService.start(context)
@@ -159,11 +195,13 @@ object AudioRecorderEngine {
                 return false
             }
 
-            val projection = projectionManager.getMediaProjection(resultCode, data)
+            val projection = projectionManager.getMediaProjection(finalCode, finalIntent)
             if (projection == null) {
                 _recorderState.value = _recorderState.value.copy(
-                    errorMessage = "Izin merekam audio internal ditolak atau tidak valid."
+                    errorMessage = "Izin transmisi audio tidak valid atau kadaluarsa."
                 )
+                preAuthorizedToken = null
+                _recorderState.value = _recorderState.value.copy(isCaptureAuthorized = false)
                 return false
             }
             mediaProjection = projection
@@ -265,6 +303,7 @@ object AudioRecorderEngine {
             val recordDir = File(context.filesDir, "recordings")
             if (!recordDir.exists()) recordDir.mkdirs()
 
+            activeSource = source
             val prefix = if (source == AudioRecordSource.INTERNAL_APP) "Audio_Aplikasi" else "Suara_Mic"
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
             val file = File(recordDir, "${prefix}_$timestamp.m4a")
@@ -321,14 +360,25 @@ object AudioRecorderEngine {
 
                 val read = record.read(buffer, 0, buffer.size)
                 if (read > 0) {
-                    muxer.feedPcmData(buffer, read, isEndOfStream = false)
-
+                    // Apply 130% Volume Boost with soft-clipping protection
                     var maxAmp = 0
                     for (i in 0 until read step 2) {
-                        val sample = (buffer[i].toInt() and 0xFF) or (buffer[i + 1].toInt() shl 8)
-                        val absVal = abs(sample.toShort().toInt())
+                        val low = buffer[i].toInt() and 0xFF
+                        val high = buffer[i + 1].toInt()
+                        val rawSample = (low or (high shl 8)).toShort()
+
+                        // Volume boost of 130% (1.30f multiplier)
+                        val boosted = (rawSample * VOLUME_BOOST_MULTIPLIER).coerceIn(-32768f, 32767f).toInt().toShort()
+
+                        buffer[i] = (boosted.toInt() and 0xFF).toByte()
+                        buffer[i + 1] = ((boosted.toInt() shr 8) and 0xFF).toByte()
+
+                        val absVal = abs(boosted.toInt())
                         if (absVal > maxAmp) maxAmp = absVal
                     }
+
+                    muxer.feedPcmData(buffer, read, isEndOfStream = false)
+
                     val normalized = (maxAmp / 32768f).coerceIn(0.08f, 1f)
 
                     history.removeFirst()
@@ -400,37 +450,57 @@ object AudioRecorderEngine {
 
     /**
      * Stops the active recording, parses metadata, generates and embeds cover art,
-     * emits the new Mp3Item to listeners, and displays an informative toast.
+     * saves to public Music/recLish folder, and emits the new Mp3Item to listeners.
      */
     fun stopAndSaveRecording(
         autoAddCover: Boolean = true,
         onComplete: ((Mp3Item?) -> Unit)? = null
     ) {
         val context = appContext ?: return
+        val currentSource = activeSource
+        val recordTimestamp = System.currentTimeMillis()
+
         scope.launch(Dispatchers.IO) {
             val recordedFile = stopRecording()
             if (recordedFile != null && recordedFile.exists() && recordedFile.length() > 0) {
-                val initialItem = Mp3Processor.parseFromUri(context, Uri.fromFile(recordedFile))
+                val initialItem = Mp3Processor.parseFromUri(context, Uri.fromFile(recordedFile)).copy(
+                    isRecordedTrack = true,
+                    recordedAt = recordTimestamp,
+                    recordSource = if (currentSource == AudioRecordSource.INTERNAL_APP) "Output Aplikasi (Internal)" else "Mikrofon HD",
+                    volumeBoostPercent = 130,
+                    channelInfo = "Stereo (48kHz, 192kbps)"
+                )
+
                 val finalItem = if (autoAddCover) {
-                    val processed = Mp3Processor.applyCoverArt(
+                    Mp3Processor.applyCoverArt(
                         context = context,
                         item = initialItem
                     )
-                    processed
                 } else {
                     initialItem
                 }
 
-                setLastRecordedItem(finalItem)
-                _newlyRecordedTracks.emit(finalItem)
+                // Automatically export to device's public Music/recLish folder and notify MediaScanner!
+                val exportedPath = exportToPublicMusicFolder(context, finalItem)
+                val enrichedItem = finalItem.copy(
+                    isRecordedTrack = true,
+                    recordedAt = recordTimestamp,
+                    recordSource = if (currentSource == AudioRecordSource.INTERNAL_APP) "Output Aplikasi (Internal)" else "Mikrofon HD",
+                    volumeBoostPercent = 130,
+                    channelInfo = "Stereo (48kHz, 192kbps)",
+                    savedPathInfo = exportedPath ?: finalItem.effectiveUri.path
+                )
+
+                setLastRecordedItem(enrichedItem)
+                _newlyRecordedTracks.emit(enrichedItem)
 
                 withContext(Dispatchers.Main) {
                     Toast.makeText(
                         context,
-                        "Rekaman '${finalItem.title}' berhasil disimpan & diberi cover!",
+                        "Rekaman '${enrichedItem.title}' disimpan (Volume +130% & Cover Tersemat)!",
                         Toast.LENGTH_LONG
                     ).show()
-                    onComplete?.invoke(finalItem)
+                    onComplete?.invoke(enrichedItem)
                 }
             } else {
                 withContext(Dispatchers.Main) {
@@ -438,6 +508,42 @@ object AudioRecorderEngine {
                     onComplete?.invoke(null)
                 }
             }
+        }
+    }
+
+    /**
+     * Exports a copy to Environment.DIRECTORY_MUSIC/recLish so it is immediately visible
+     * in the phone's music player and file manager.
+     */
+    fun exportToPublicMusicFolder(context: Context, item: Mp3Item): String? {
+        return try {
+            val musicDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "recLish")
+            if (!musicDir.exists()) musicDir.mkdirs()
+            val targetFile = File(musicDir, item.fileName)
+            val sourceUri = item.effectiveUri
+            val inStream = if (sourceUri.scheme == "file") {
+                File(sourceUri.path ?: "").inputStream()
+            } else {
+                context.contentResolver.openInputStream(sourceUri)
+            }
+            if (inStream != null) {
+                inStream.use { input ->
+                    FileOutputStream(targetFile).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                // Notify Android MediaScanner so phone music player immediately indexes the file & cover art
+                MediaScannerConnection.scanFile(
+                    context,
+                    arrayOf(targetFile.absolutePath),
+                    arrayOf(if (item.audioFormat == com.example.mp3.AudioFormat.M4A) "audio/mp4" else "audio/mpeg"),
+                    null
+                )
+                targetFile.absolutePath
+            } else null
+        } catch (e: Exception) {
+            Log.e(TAG, "Gagal ekspor ke folder Musik publik", e)
+            null
         }
     }
 
@@ -450,8 +556,6 @@ object AudioRecorderEngine {
 
         try {
             audioRecord?.stop()
-        } catch (_: Exception) {}
-        try {
             audioRecord?.release()
         } catch (_: Exception) {}
         audioRecord = null
@@ -461,13 +565,17 @@ object AudioRecorderEngine {
         } catch (_: Exception) {}
         mediaProjection = null
 
-        pcmToAacMuxer?.finishAndRelease()
+        try {
+            pcmToAacMuxer?.cancel()
+        } catch (_: Exception) {}
         pcmToAacMuxer = null
 
-        appContext?.let { AudioCaptureForegroundService.stop(it) }
-
-        activeOutputFile?.delete()
+        activeOutputFile?.let {
+            if (it.exists()) it.delete()
+        }
         activeOutputFile = null
+
+        appContext?.let { AudioCaptureForegroundService.stop(it) }
 
         _recorderState.value = _recorderState.value.copy(
             isRecording = false,
@@ -475,24 +583,25 @@ object AudioRecorderEngine {
             elapsedSeconds = 0,
             currentAmplitude = 0f,
             currentFile = null,
-            waveformHistory = List(16) { 0.08f },
-            errorMessage = null
+            waveformHistory = List(16) { 0.08f }
         )
     }
 
     private fun stopCurrentSession() {
-        cancelRecording()
+        if (_recorderState.value.isRecording) {
+            cancelRecording()
+        }
     }
 
     private fun startTimer() {
         timerJob?.cancel()
-        timerJob = scope.launch(Dispatchers.Main) {
-            var seconds = 0
-            while (isActive) {
+        timerJob = scope.launch {
+            while (isActive && _recorderState.value.isRecording) {
                 delay(1000)
                 if (!_recorderState.value.isPaused) {
-                    seconds++
-                    _recorderState.value = _recorderState.value.copy(elapsedSeconds = seconds)
+                    _recorderState.value = _recorderState.value.copy(
+                        elapsedSeconds = _recorderState.value.elapsedSeconds + 1
+                    )
                 }
             }
         }

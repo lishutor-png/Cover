@@ -2,7 +2,10 @@ package com.example.ui.components
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.MediaScannerConnection
 import android.net.Uri
+import android.os.Environment
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -32,8 +35,12 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -67,8 +74,10 @@ import com.example.model.Mp3Item
 import com.example.mp3.CoverArtGenerator
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.ElectricViolet
-import androidx.compose.material.icons.outlined.DeleteOutline
+import com.example.ui.theme.EmeraldSuccess
 import com.example.ui.theme.RubyError
+import java.io.File
+import java.io.FileOutputStream
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -122,6 +131,42 @@ fun CoverPreviewModal(
         }
     }
 
+    fun saveDirectlyToDeviceMusicFolder() {
+        try {
+            val musicDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "recLish")
+            if (!musicDir.exists()) musicDir.mkdirs()
+            val targetFile = File(musicDir, item.fileName)
+            val sourceUri = item.effectiveUri
+            val inStream = if (sourceUri.scheme == "file") {
+                File(sourceUri.path ?: "").inputStream()
+            } else {
+                context.contentResolver.openInputStream(sourceUri)
+            }
+            if (inStream != null) {
+                inStream.use { input ->
+                    FileOutputStream(targetFile).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                MediaScannerConnection.scanFile(
+                    context,
+                    arrayOf(targetFile.absolutePath),
+                    arrayOf(if (item.audioFormat == com.example.mp3.AudioFormat.M4A) "audio/mp4" else "audio/mpeg"),
+                    null
+                )
+                Toast.makeText(
+                    context,
+                    "✅ Tersimpan di Musik: ${targetFile.name} (Cover Terpasang)!",
+                    Toast.LENGTH_LONG
+                ).show()
+            } else {
+                Toast.makeText(context, "Gagal membaca audio sumber", Toast.LENGTH_SHORT).show()
+            }
+        } catch (e: Exception) {
+            Toast.makeText(context, "Gagal simpan: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -143,7 +188,7 @@ fun CoverPreviewModal(
             ) {
                 Column {
                     Text(
-                        text = "Pengaturan Cover Art MP3",
+                        text = "Pengaturan Cover & Info • recLish",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
@@ -222,6 +267,49 @@ fun CoverPreviewModal(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // ==========================================
+            // INFORMASI REKAMAN & AUDIO (User Request 4)
+            // ==========================================
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                ),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "📋 Spesifikasi & Info Rekaman",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = ElectricCyan
+                    )
+
+                    InfoRow(label = "Format & Saluran", value = "${item.audioFormat.displayName} • ${item.channelInfo}")
+                    InfoRow(label = "Penguat Volume", value = "+${item.volumeBoostPercent}% Otomatis (Jernih)")
+                    InfoRow(label = "Sumber Audio", value = item.recordSource ?: if (item.isRecordedTrack) "Audio Aplikasi" else "File Audio")
+                    item.formattedRecordedDate?.let { dateStr ->
+                        InfoRow(label = "Waktu Rekaman", value = dateStr)
+                    }
+                    InfoRow(label = "Durasi & Ukuran", value = "${item.formattedDuration} • ${item.formattedSize}")
+                    InfoRow(
+                        label = "Status Sampul",
+                        value = if (item.hasProcessedCover) "✅ Cover Tersemat Permanen" else if (item.hasOriginalCover) "Cover Bawaan" else "⚡ Belum Ada Cover"
+                    )
+                    item.savedPathInfo?.let { path ->
+                        InfoRow(label = "Lokasi File", value = path)
+                    }
+                }
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
 
             // Style Selector Title
@@ -269,9 +357,9 @@ fun CoverPreviewModal(
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            // Pick Custom Image Option
+            // Custom Image From Gallery Button
             OutlinedButton(
                 onClick = { photoPickerLauncher.launch("image/*") },
                 modifier = Modifier
@@ -290,7 +378,7 @@ fun CoverPreviewModal(
                 )
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             // Audio Playback Verification Test Button
             OutlinedButton(
@@ -307,12 +395,12 @@ fun CoverPreviewModal(
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(text = "Uji Putar Suara MP3", color = ElectricCyan)
+                Text(text = "Uji Putar Suara Audio", color = ElectricCyan)
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Action Buttons (Apply & Export)
+            // Action Buttons (Apply & Export / Save Direct)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -338,23 +426,44 @@ fun CoverPreviewModal(
                     Text(text = "Terapkan Cover", fontWeight = FontWeight.Bold)
                 }
 
-                if (item.hasProcessedCover) {
-                    OutlinedButton(
-                        onClick = {
-                            val exportName = item.fileName.substringBeforeLast('.') + "_covered.mp3"
-                            exportLauncher.launch(exportName)
-                        },
-                        modifier = Modifier.testTag("export_mp3_button"),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Download,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(text = "Ekspor")
-                    }
+                Button(
+                    onClick = { saveDirectlyToDeviceMusicFolder() },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("save_direct_music_button"),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldSuccess)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Save,
+                        contentDescription = null,
+                        tint = Color.Black,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(text = "Simpan ke Musik", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            if (item.hasProcessedCover) {
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = {
+                        val exportName = item.fileName.substringBeforeLast('.') + "_covered.mp3"
+                        exportLauncher.launch(exportName)
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("export_mp3_button"),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Download,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(text = "Ekspor ke Lokasi Lain...")
                 }
             }
 
@@ -387,5 +496,28 @@ fun CoverPreviewModal(
 
             Spacer(modifier = Modifier.height(24.dp))
         }
+    }
+}
+
+@Composable
+private fun InfoRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = value,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }

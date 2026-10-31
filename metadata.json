@@ -1,6 +1,6 @@
 {
-  "name": "CoverCraft MP3",
-  "description": "Otomatis tambahkan sampul cover art berkualitas pada file MP3 tanpa cover dan uji pemutaran audio secara langsung.",
+  "name": "recLish",
+  "description": "Perekam audio output aplikasi & mikrofon HD dengan konfirmasi transmisi instan saat membuka bubble, penguat volume 130%, dan penyematan cover art otomatis.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

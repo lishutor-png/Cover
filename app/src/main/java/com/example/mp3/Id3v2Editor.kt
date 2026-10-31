@@ -128,7 +128,7 @@ object Id3v2Editor {
         mimeType: String = "image/jpeg",
         fallbackTitle: String = "Unknown Title",
         fallbackArtist: String = "Unknown Artist",
-        fallbackAlbum: String = "CoverCraft Album"
+        fallbackAlbum: String = "recLish Album"
     ): ByteArray {
         val inspection = inspect(sourceBytes)
 

@@ -153,13 +153,13 @@ fun MainScreen(
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
                                 Text(
-                                    text = "CoverCraft MP3",
+                                    text = "recLish",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
-                                    text = "Perekam Audio Aplikasi & Auto Cover",
+                                    text = "Perekam Audio Output Aplikasi (Vol +130%) & Auto Cover",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = ElectricCyan,
                                     fontSize = 10.sp
@@ -465,13 +465,13 @@ fun MainScreen(
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Column {
                                     Text(
-                                        text = if (recorderState.isSystemOverlayActive) "Bubble Melayang di Layar: AKTIF" else "Rekam Suara dari Aplikasi Lain",
+                                        text = if (recorderState.isSystemOverlayActive) "Bubble recLish: AKTIF di Layar" else "Bubble Melayang recLish",
                                         style = MaterialTheme.typography.titleSmall,
                                         fontWeight = FontWeight.Bold,
                                         color = if (recorderState.isSystemOverlayActive) EmeraldSuccess else MaterialTheme.colorScheme.onSurface
                                     )
                                     Text(
-                                        text = if (recorderState.isSystemOverlayActive) "Buka YouTube, Spotify, atau game untuk merekam!" else "Aktifkan bubble melayang di atas Spotify/YouTube",
+                                        text = if (recorderState.isSystemOverlayActive) "Buka YouTube/Spotify & rekam instan (Vol Boost +130%)" else "Buka YouTube/Spotify untuk rekam seketika (Boost +130%)",
                                         style = MaterialTheme.typography.bodySmall,
                                         fontSize = 11.sp,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -525,7 +525,7 @@ fun MainScreen(
                         }
 
                         Button(
-                            onClick = { viewModel.showRecorderBubble() },
+                            onClick = { viewModel.showRecorderBubble(context) },
                             modifier = Modifier
                                 .weight(1.2f)
                                 .testTag("open_recorder_bubble_btn"),
@@ -721,7 +721,7 @@ fun MainScreen(
             },
             text = {
                 Text(
-                    text = "Agar bubble perekam dapat melayang di atas aplikasi lain (seperti YouTube, Spotify, atau game) dan merekam suara yang sedang dimainkan, silakan berikan izin 'Display over other apps' di Pengaturan.\n\nKetuk 'Buka Pengaturan', lalu aktifkan sakelar untuk CoverCraft MP3."
+                    text = "Agar bubble perekam dapat melayang di atas aplikasi lain (seperti YouTube, Spotify, atau game) dan merekam suara yang sedang dimainkan, silakan berikan izin 'Display over other apps' di Pengaturan.\n\nKetuk 'Buka Pengaturan', lalu aktifkan sakelar untuk recLish."
                 )
             },
             confirmButton = {

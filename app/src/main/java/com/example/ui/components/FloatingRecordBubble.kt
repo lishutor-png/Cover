@@ -135,6 +135,7 @@ fun FloatingRecordBubble(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            com.example.mp3.AudioRecorderEngine.setPreAuthorizedToken(result.resultCode, result.data!!)
             onStartInternalAudio(result.resultCode, result.data!!)
         }
     }
@@ -148,9 +149,27 @@ fun FloatingRecordBubble(
         }
     }
 
+    // Pre-authorize transmission immediately when opening the bubble!
+    androidx.compose.runtime.LaunchedEffect(recorderState.isBubbleVisible) {
+        if (recorderState.isBubbleVisible && !com.example.mp3.AudioRecorderEngine.hasPreAuthorizedToken()) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val projectionManager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
+                if (projectionManager != null) {
+                    try {
+                        mediaProjectionLauncher.launch(projectionManager.createScreenCaptureIntent())
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+    }
+
     fun requestStartRecording() {
         if (recorderState.source == AudioRecordSource.INTERNAL_APP) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val cached = com.example.mp3.AudioRecorderEngine.getPreAuthorizedToken()
+            if (cached != null) {
+                // INSTANT RECORDING! No confirmation dialog interrupt while on YouTube/Spotify!
+                onStartInternalAudio(cached.first, cached.second)
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val projectionManager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
                 if (projectionManager != null) {
                     mediaProjectionLauncher.launch(projectionManager.createScreenCaptureIntent())
@@ -348,13 +367,13 @@ fun FloatingRecordBubble(
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
                                 Text(
-                                    text = "Bubble Perekam Cerdas",
+                                    text = "🎙️ recLish Studio",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
-                                    text = if (recorderState.isRecording) "🔴 Sedang Merekam..." else "Kualitas Jernih 48kHz HD",
+                                    text = if (recorderState.isRecording) "🔴 Sedang Merekam (Vol +130%)..." else "HD 48kHz • Vol Boost +130%",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = if (recorderState.isRecording) RubyError else ElectricCyan,
                                     fontSize = 10.sp
@@ -580,7 +599,7 @@ fun FloatingRecordBubble(
                                 color = EmeraldSuccess.copy(alpha = 0.15f)
                             ) {
                                 Text(
-                                    text = "48 kHz • 192 kbps HD",
+                                    text = "48 kHz • 192 kbps • Vol +130%",
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = EmeraldSuccess,
@@ -589,7 +608,7 @@ fun FloatingRecordBubble(
                             }
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "Format MPEG-4 AAC (.m4a)",
+                                text = "Format AAC & MP3 • Auto Cover",
                                 fontSize = 10.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

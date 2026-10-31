@@ -84,7 +84,7 @@ object M4aCoverEditor {
         mimeType: String = "image/jpeg",
         fallbackTitle: String = "Rekaman Audio",
         fallbackArtist: String = "Suara Pengguna",
-        fallbackAlbum: String = "CoverCraft Recordings"
+        fallbackAlbum: String = "recLish Recordings"
     ): ByteArray {
         val inspection = inspect(sourceBytes)
         val effectiveTitle = inspection.title ?: fallbackTitle

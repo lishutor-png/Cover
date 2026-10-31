@@ -10,6 +10,7 @@ import com.example.model.ProcessingStatus
 import android.os.Build
 import android.provider.Settings
 import com.example.mp3.AudioRecorderEngine
+import com.example.mp3.CapturePermissionActivity
 import com.example.mp3.FloatingOverlayService
 import com.example.mp3.Mp3Processor
 import com.example.mp3.RecorderState
@@ -119,13 +120,18 @@ class Mp3ViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleSystemOverlay(context: android.content.Context) {
         if (recorderState.value.isSystemOverlayActive) {
             FloatingOverlayService.stop(context)
-            _userMessage.value = "Bubble di atas aplikasi lain dinonaktifkan."
+            _userMessage.value = "Bubble recLish di atas aplikasi lain dinonaktifkan."
         } else {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
                 _overlayPermissionRequired.value = true
             } else {
                 FloatingOverlayService.start(context)
-                _userMessage.value = "Bubble melayang aktif! Anda dapat membuka aplikasi lain dan merekam suaranya."
+                // Request transmission permission immediately when opening bubble
+                // so user can record instantly from other apps without confirmation delay!
+                if (!AudioRecorderEngine.hasPreAuthorizedToken()) {
+                    CapturePermissionActivity.launchForPreAuth(context)
+                }
+                _userMessage.value = "Bubble recLish aktif! Transmisi siap merekam audio aplikasi (Vol +130%)."
             }
         }
     }
@@ -164,8 +170,11 @@ class Mp3ViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun showRecorderBubble() {
+    fun showRecorderBubble(context: android.content.Context? = null) {
         AudioRecorderEngine.showBubble()
+        if (context != null && !AudioRecorderEngine.hasPreAuthorizedToken()) {
+            CapturePermissionActivity.launchForPreAuth(context)
+        }
     }
 
     fun hideRecorderBubble() {

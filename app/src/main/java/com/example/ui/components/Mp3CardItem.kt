@@ -331,6 +331,41 @@ fun Mp3CardItem(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+
+                    if (item.isRecordedTrack || item.recordedAt != null || item.recordSource != null) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = EmeraldSuccess.copy(alpha = 0.15f)
+                            ) {
+                                Text(
+                                    text = "+${item.volumeBoostPercent}% Vol",
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = EmeraldSuccess,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                )
+                            }
+                            item.recordSource?.let { src ->
+                                Text(
+                                    text = "• $src",
+                                    fontSize = 9.sp,
+                                    color = ElectricCyan
+                                )
+                            }
+                            item.formattedRecordedDate?.let { dateStr ->
+                                Text(
+                                    text = "• $dateStr",
+                                    fontSize = 9.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
                 }
 
                 Row(

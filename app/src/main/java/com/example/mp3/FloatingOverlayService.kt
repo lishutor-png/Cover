@@ -88,6 +88,12 @@ class FloatingOverlayService : Service() {
         createNotification()
         setupFloatingWindow()
         observeRecorderState()
+
+        // Immediately request transmission confirmation when opening the bubble
+        // so user never has to confirm or switch apps when tapping record!
+        if (!AudioRecorderEngine.hasPreAuthorizedToken()) {
+            CapturePermissionActivity.launchForPreAuth(this)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -112,10 +118,10 @@ class FloatingOverlayService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Bubble Melayang di Atas Aplikasi",
+                "recLish Bubble Melayang",
                 NotificationManager.IMPORTANCE_LOW
             )
-            channel.description = "Notifikasi saat Bubble Perekam aktif di atas aplikasi lain"
+            channel.description = "Notifikasi saat Bubble Perekam recLish aktif di atas aplikasi lain"
             val manager = getSystemService(NotificationManager::class.java)
             manager?.createNotificationChannel(channel)
         }
@@ -128,8 +134,8 @@ class FloatingOverlayService : Service() {
         )
 
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Bubble Perekam Aktif di Layar")
-            .setContentText("Ketuk bubble untuk merekam audio dari aplikasi yang sedang dibuka")
+            .setContentTitle("recLish • Bubble Perekam Aktif")
+            .setContentText("Ketuk bubble untuk merekam audio aplikasi (Vol Boost +130%)")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentIntent(openAppIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -282,7 +288,7 @@ class FloatingOverlayService : Service() {
         }
 
         val cardTitle = TextView(this).apply {
-            text = "Bubble Audio Sistem"
+            text = "🎙️ recLish Bubble"
             setTextColor(Color.WHITE)
             textSize = 13f
             setTypeface(null, Typeface.BOLD)
@@ -290,7 +296,7 @@ class FloatingOverlayService : Service() {
         titleCol.addView(cardTitle)
 
         val cardSub = TextView(this).apply {
-            text = "Merekam Audio Aplikasi Lain (HD 48kHz)"
+            text = "Output Aplikasi • Vol Boost 130%"
             setTextColor(Color.parseColor("#00E5FF"))
             textSize = 10f
         }
@@ -387,7 +393,12 @@ class FloatingOverlayService : Service() {
                 val state = AudioRecorderEngine.recorderState.value
                 if (!state.isRecording) {
                     if (state.source == AudioRecordSource.INTERNAL_APP) {
-                        CapturePermissionActivity.launch(this@FloatingOverlayService)
+                        if (AudioRecorderEngine.hasPreAuthorizedToken()) {
+                            // Instant recording! No dialog interrupt!
+                            AudioRecorderEngine.startInternalAudioRecording()
+                        } else {
+                            CapturePermissionActivity.launch(this@FloatingOverlayService, autoStart = true)
+                        }
                     } else {
                         AudioRecorderEngine.startMicRecording()
                     }
@@ -448,7 +459,7 @@ class FloatingOverlayService : Service() {
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 topMargin = (8 * dp).toInt()
             }
-            text = "📲 Buka CoverCraft MP3"
+            text = "📲 Buka Aplikasi recLish"
             setTextColor(Color.parseColor("#B0BEC5"))
             textSize = 11f
             gravity = Gravity.CENTER

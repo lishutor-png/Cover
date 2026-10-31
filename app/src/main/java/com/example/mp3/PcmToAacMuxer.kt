@@ -159,4 +159,27 @@ class PcmToAacMuxer(
             null
         }
     }
+
+    fun cancel() {
+        try {
+            mediaCodec?.stop()
+            mediaCodec?.release()
+        } catch (_: Exception) {}
+        mediaCodec = null
+
+        try {
+            if (isMuxerStarted) {
+                mediaMuxer?.stop()
+            }
+            mediaMuxer?.release()
+        } catch (_: Exception) {}
+        mediaMuxer = null
+        isMuxerStarted = false
+
+        try {
+            if (outputFile.exists()) {
+                outputFile.delete()
+            }
+        } catch (_: Exception) {}
+    }
 }
